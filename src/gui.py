@@ -157,7 +157,7 @@ class App:
 
     def _worker(self, emotion_groups, top_n, output_dir):
         try:
-            from wd_scorer import WDTaggerScorer
+            from wd_scorer import CamieTaggerScorer
 
             # Extract EXIF tags for combined scoring
             self.queue.put(("status", "Reading EXIF tags from images..."))
@@ -165,8 +165,14 @@ class App:
             found = sum(1 for v in exif_tags.values() if v)
             self.queue.put(("status", f"EXIF tags found for {found}/{len(exif_tags)} emotions. Loading model..."))
 
-            scorer = WDTaggerScorer()
-            self.queue.put(("status", "Analyzing images with WD Tagger..."))
+            def download_cb(msg_type, msg_data):
+                self.queue.put((msg_type, msg_data))
+
+            scorer = CamieTaggerScorer(download_callback=download_cb)
+
+            # Reset progress for analysis phase
+            self.queue.put(("progress", 0))
+            self.queue.put(("status", "Analyzing images with Camie Tagger v2..."))
 
             def progress_cb(current, total):
                 pct = current / total * 100
@@ -184,7 +190,7 @@ class App:
 
             config = {
                 "top_n": top_n,
-                "model": "WD-Tagger-v3",
+                "model": "Camie-Tagger-v2",
             }
             generate_report(scored, top_n, config, output_dir)
 

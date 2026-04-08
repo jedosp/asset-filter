@@ -1,4 +1,4 @@
-onnxruntime
+onnxruntime-directml
 huggingface_hub
 numpy
 Pillow

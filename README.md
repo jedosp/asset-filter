@@ -2,15 +2,18 @@
 
 NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링하는 Windows GUI 앱.
 
-**WD Tagger v3** (Danbooru 기반 애니 이미지 분류 모델)를 사용해 감정 키워드별로 점수를 매기고, 상위 N장을 자동으로 출력 폴더로 복사합니다.
+**Camie Tagger v2** (70,527개 Danbooru 태그, ViT 기반)를 사용해 감정 키워드별로 점수를 매기고, 상위 N장을 자동으로 출력 폴더로 복사합니다.
 
 ---
 
 ## 기능
 
-- **WD Tagger v3** — NovelAI 감정 태그와 동일한 Danbooru 태그 체계를 사용해 정확한 감정 표현 분류
+- **Camie Tagger v2** — 70k+ Danbooru 태그로 정밀한 감정·결함 분류 (512px, Micro F1 67.3%)
+- **EXIF 태그 결합 스코어링** — NovelAI char_captions 메타데이터를 활용해 정확도 향상
+- **해부학 결함 자동 감지** — bad_anatomy, extra_fingers 등 22개 결함 태그로 불량 이미지 자동 감점
+- **DirectML GPU 가속** — Windows GPU 자동 감지, GPU 없으면 CPU 자동 전환
 - 전체 이미지를 단일 패스로 추론 (감정 수가 많아도 속도 일정)
-- 진행 상황 실시간 표시 (프로그레스 바)
+- 모델 다운로드 / 이미지 분석 단계별 프로그레스 바
 - 필터링 결과를 `report.json`으로 저장
 
 ---
@@ -22,7 +25,7 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 1. [Releases](https://github.com/jedosp/asset-filter/releases) 페이지에서 ZIP 다운로드
 2. 압축 해제
 3. `AssetFilter.exe` 더블클릭
-4. 첫 실행 시 WD Tagger 모델 자동 다운로드 (~350MB)
+4. 첫 실행 시 Camie Tagger v2 모델 자동 다운로드 (~800MB)
 
 ### 소스에서 실행 (개발용)
 
@@ -75,7 +78,7 @@ gabriel.angry.30.png
 
 | 패키지 | 용도 |
 |--------|------|
-| `onnxruntime` | WD Tagger v3 ONNX 추론 |
+| `onnxruntime-directml` | Camie Tagger v2 ONNX 추론 (GPU/CPU) |
 | `huggingface_hub` | 모델 자동 다운로드 |
 | `Pillow` | 이미지 로드 및 전처리 |
 | `numpy` | 배열 연산 |
