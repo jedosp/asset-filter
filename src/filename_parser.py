@@ -57,6 +57,3 @@ def scan_folder(folder: Path) -> dict[str, list[tuple[Path, int]]]:
         groups.setdefault(emotion, []).append((p, number))
 
     return groups
-        prompts[emotion] = prompt
-
-    return prompts

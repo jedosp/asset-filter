@@ -5,6 +5,12 @@ import os
 import sys
 import tkinter as tk
 
+# For PyInstaller: ensure bundled modules are on sys.path
+if getattr(sys, 'frozen', False):
+    sys.path.insert(0, sys._MEIPASS)
+else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # Set HF_HOME for portable model caching
 app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("HF_HOME", os.path.join(app_dir, "cache", "huggingface"))

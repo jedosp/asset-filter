@@ -12,9 +12,10 @@ __pycache__/
 # Output folders
 *_filtered/
 
-# IDE
-.vscode/
-.idea/
+# Build output
+build/
+dist/
+*.spec
 
 # OS
 Thumbs.db

@@ -10,7 +10,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
-from parser import parse_filename, scan_folder
+from filename_parser import parse_filename, scan_folder
 from filter import filter_and_copy
 from report import generate_report
 
