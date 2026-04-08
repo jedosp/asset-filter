@@ -10,7 +10,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
-from filename_parser import parse_filename, scan_folder
+from filename_parser import parse_filename, scan_folder, extract_exif_tags_by_emotion
 from filter import filter_and_copy
 from report import generate_report
 
@@ -142,7 +142,7 @@ class App:
 
         input_folder = Path(self.folder_var.get())
         self.output_dir = input_folder.parent / f"{input_folder.name}_filtered"
-        self.status_var.set("Loading WD Tagger v3 model...")
+        self.status_var.set("Reading EXIF tags from images...")
 
         thread = threading.Thread(
             target=self._worker,
@@ -158,7 +158,12 @@ class App:
     def _worker(self, emotion_groups, top_n, output_dir):
         try:
             from wd_scorer import WDTaggerScorer
-            total_images = sum(len(v) for v in emotion_groups.values())
+
+            # Extract EXIF tags for combined scoring
+            self.queue.put(("status", "Reading EXIF tags from images..."))
+            exif_tags = extract_exif_tags_by_emotion(emotion_groups)
+            found = sum(1 for v in exif_tags.values() if v)
+            self.queue.put(("status", f"EXIF tags found for {found}/{len(exif_tags)} emotions. Loading model..."))
 
             scorer = WDTaggerScorer()
             self.queue.put(("status", "Analyzing images with WD Tagger..."))
@@ -170,6 +175,7 @@ class App:
 
             scored = scorer.score_all(
                 emotion_groups, batch_size=16, progress_callback=progress_cb,
+                exif_tags=exif_tags,
             )
 
             self.queue.put(("status", "Copying files..."))

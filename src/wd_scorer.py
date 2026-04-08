@@ -85,18 +85,19 @@ class WDTaggerScorer:
         emotion_groups: dict[str, list[tuple[Path, int]]],
         batch_size: int = 16,
         progress_callback: Callable[[int, int], None] | None = None,
+        exif_tags: dict[str, list[str]] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         """
         Score all images in a single inference pass, then assign per-emotion scores.
 
-        WD Tagger classifies all tags at once, so we only need one pass
-        through every image regardless of how many emotions there are.
+        If exif_tags is provided, the final score is a weighted combination:
+          score = 0.5 * emotion_score + 0.5 * exif_tag_score
 
         progress_callback(current_image, total_images)
         """
         emotions = sorted(emotion_groups.keys())
 
-        # Pre-resolve tag indices
+        # Pre-resolve emotion tag indices
         emotion_tag_indices: dict[str, list[int]] = {}
         for emotion in emotions:
             indices = self._find_tag_indices(emotion)
@@ -106,6 +107,25 @@ class WDTaggerScorer:
                 matched = [self.tag_names[i] for i in indices]
                 logger.info("Emotion '%s' → WD tags: %s", emotion, matched)
             emotion_tag_indices[emotion] = indices
+
+        # Pre-resolve EXIF tag indices per emotion (excluding emotion tag itself)
+        exif_tag_indices: dict[str, list[int]] = {}
+        if exif_tags:
+            for emotion in emotions:
+                emotion_tag = emotion.replace(" ", "_").lower()
+                indices = []
+                tags_used = []
+                for tag in exif_tags.get(emotion, []):
+                    if tag == emotion_tag:
+                        continue  # emotion tag is already scored separately
+                    if tag in self.tag_to_index:
+                        indices.append(self.tag_to_index[tag])
+                        tags_used.append(tag)
+                exif_tag_indices[emotion] = indices
+                if tags_used:
+                    logger.info("Emotion '%s' EXIF tags: %s", emotion, tags_used)
+                else:
+                    logger.info("Emotion '%s': no matching EXIF tags in WD vocabulary", emotion)
 
         # Flatten all images for single-pass inference
         all_items: list[tuple[str, Path, int]] = []
@@ -144,11 +164,17 @@ class WDTaggerScorer:
         results: dict[str, list[dict[str, Any]]] = {}
         for emotion in emotions:
             tag_indices = emotion_tag_indices[emotion]
+            exif_indices = exif_tag_indices.get(emotion, []) if exif_tags else []
             scored_items = []
             for path, number in emotion_groups[emotion]:
                 probs = image_probs.get(path)
                 if probs is not None and tag_indices:
-                    score = float(np.mean([probs[idx] for idx in tag_indices]))
+                    emotion_score = float(np.mean([probs[idx] for idx in tag_indices]))
+                    if exif_indices:
+                        exif_score = float(np.mean([probs[idx] for idx in exif_indices]))
+                        score = 0.5 * emotion_score + 0.5 * exif_score
+                    else:
+                        score = emotion_score
                 else:
                     score = 0.0
                 scored_items.append({"path": path, "score": score, "number": number})

@@ -1,6 +1,6 @@
 [project]
 name = "asset-filter"
-version = "0.1.1"
+version = "0.2.0"
 description = "NovelAI 캐릭터 감정 이미지 자동 필터링 도구 (WD Tagger v3)"
 readme = "README.md"
 license = {text = "MIT"}
