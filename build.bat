@@ -13,7 +13,7 @@ if exist AssetFilter.spec del AssetFilter.spec
 echo [Build] Building AssetFilter.exe...
 python -m PyInstaller ^
     --onefile ^
-    --windowed ^
+    --console ^
     --name AssetFilter ^
     --add-data "src\filename_parser.py;." ^
     --add-data "src\gui.py;." ^

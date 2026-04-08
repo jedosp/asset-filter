@@ -8,11 +8,13 @@ import tkinter as tk
 # For PyInstaller: ensure bundled modules are on sys.path
 if getattr(sys, 'frozen', False):
     sys.path.insert(0, sys._MEIPASS)
+    # exe 실행 시 exe 파일이 있는 폴더 기준으로 캐시 저장
+    app_dir = os.path.dirname(sys.executable)
 else:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Set HF_HOME for portable model caching
-app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("HF_HOME", os.path.join(app_dir, "cache", "huggingface"))
 
 # Configure logging
