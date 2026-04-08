@@ -165,7 +165,13 @@ class App:
             found = sum(1 for v in exif_tags.values() if v)
             self.queue.put(("status", f"EXIF tags found for {found}/{len(exif_tags)} emotions. Loading model..."))
 
-            scorer = CamieTaggerScorer()
+            def download_cb(msg_type, msg_data):
+                self.queue.put((msg_type, msg_data))
+
+            scorer = CamieTaggerScorer(download_callback=download_cb)
+
+            # Reset progress for analysis phase
+            self.queue.put(("progress", 0))
             self.queue.put(("status", "Analyzing images with Camie Tagger v2..."))
 
             def progress_cb(current, total):

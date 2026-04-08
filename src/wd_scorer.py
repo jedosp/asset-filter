@@ -35,14 +35,35 @@ NEGATIVE_TAGS = [
 
 
 class CamieTaggerScorer:
-    def __init__(self):
+    def __init__(self, download_callback=None):
         import onnxruntime as ort
 
-        logger.info("Downloading Camie Tagger v2 model...")
-        model_path = hf_hub_download(MODEL_REPO, MODEL_FILENAME)
-        metadata_path = hf_hub_download(MODEL_REPO, METADATA_FILENAME)
+        def _notify(status=None, progress=None):
+            if download_callback:
+                if status is not None:
+                    download_callback("status", status)
+                if progress is not None:
+                    download_callback("progress", progress)
 
-        logger.info("Loading ONNX model...")
+        # Check if model is already cached
+        needs_download = False
+        try:
+            hf_hub_download(MODEL_REPO, MODEL_FILENAME, local_files_only=True)
+        except Exception:
+            needs_download = True
+
+        if needs_download:
+            _notify(status="Downloading metadata...", progress=5)
+            metadata_path = hf_hub_download(MODEL_REPO, METADATA_FILENAME)
+            _notify(status="Downloading model (~789MB), please wait...", progress=10)
+            model_path = hf_hub_download(MODEL_REPO, MODEL_FILENAME)
+            _notify(progress=90)
+        else:
+            _notify(status="Loading model from cache...")
+            model_path = hf_hub_download(MODEL_REPO, MODEL_FILENAME)
+            metadata_path = hf_hub_download(MODEL_REPO, METADATA_FILENAME)
+
+        _notify(status="Initializing ONNX runtime...", progress=95)
         providers = []
         available = ort.get_available_providers()
         if "DmlExecutionProvider" in available:
@@ -51,6 +72,7 @@ class CamieTaggerScorer:
         self.session = ort.InferenceSession(model_path, providers=providers)
         logger.info("ONNX providers: %s", self.session.get_providers())
         self.input_name = self.session.get_inputs()[0].name
+        _notify(progress=100)
 
         # Load tag vocabulary from metadata JSON
         with open(metadata_path, "r", encoding="utf-8") as f:
