@@ -1,0 +1,8 @@
+open-clip-torch
+torch --index-url https://download.pytorch.org/whl/cpu
+Pillow
+tqdm
+PyYAML
+onnxruntime
+huggingface_hub
+numpy

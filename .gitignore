@@ -1,0 +1,21 @@
+# Embedded Python runtime (user provides separately)
+python/
+
+# Model cache (downloaded on first run)
+cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Output folders
+*_filtered/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+desktop.ini
