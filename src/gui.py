@@ -1,4 +1,4 @@
-"""tkinter GUI for CLIP Emotion Image Filter."""
+"""tkinter GUI for Emotion Image Filter."""
 
 import logging
 import os
@@ -10,8 +10,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
-from parser import parse_filename, scan_folder, extract_prompts_by_emotion
-from scorer import CLIPScorer
+from parser import parse_filename, scan_folder
 from filter import filter_and_copy
 from report import generate_report
 
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("CLIP Emotion Image Filter")
+        self.root.title("Emotion Image Filter")
         self.root.resizable(False, False)
 
         self.queue: queue.Queue = queue.Queue()
@@ -60,34 +59,6 @@ class App:
         self.topn_spin = ttk.Spinbox(frame, from_=1, to=30, textvariable=self.topn_var, width=6)
         self.topn_spin.grid(row=row, column=1, sticky="w", **pad)
 
-        # --- Model selection ---
-        row += 1
-        ttk.Label(frame, text="Model:").grid(row=row, column=0, sticky="w", **pad)
-        model_frame = ttk.Frame(frame)
-        model_frame.grid(row=row, column=1, columnspan=2, sticky="w", **pad)
-        self.model_var = tk.StringVar(value="WD-Tagger-v3")
-        ttk.Radiobutton(model_frame, text="WD Tagger v3 (best for anime)", variable=self.model_var, value="WD-Tagger-v3").pack(anchor="w")
-        ttk.Radiobutton(model_frame, text="CLIP ViT-B-32 (fast)", variable=self.model_var, value="ViT-B-32").pack(anchor="w")
-        ttk.Radiobutton(model_frame, text="CLIP ViT-L-14 (accurate, slower)", variable=self.model_var, value="ViT-L-14").pack(anchor="w")
-        self.model_var.trace_add("write", self._on_model_change)
-
-        # --- EXIF prompt option ---
-        row += 1
-        self.use_exif_var = tk.BooleanVar(value=False)
-        self.exif_check = ttk.Checkbutton(
-            frame,
-            text="Use EXIF prompt (from PNG metadata, fallback to template)",
-            variable=self.use_exif_var,
-        )
-        self.exif_check.grid(row=row, column=0, columnspan=3, sticky="w", **pad)
-
-        # --- Prompt template ---
-        row += 1
-        ttk.Label(frame, text="Prompt Template:").grid(row=row, column=0, sticky="w", **pad)
-        self.prompt_var = tk.StringVar(value="anime character with {emotion} expression")
-        self.prompt_entry = ttk.Entry(frame, textvariable=self.prompt_var, width=50)
-        self.prompt_entry.grid(row=row, column=1, columnspan=2, sticky="ew", **pad)
-
         # --- Separator ---
         row += 1
         ttk.Separator(frame, orient="horizontal").grid(
@@ -121,20 +92,18 @@ class App:
         self.run_btn = ttk.Button(btn_frame, text="▶ Run Filter", command=self._run_filter)
         self.run_btn.pack(side="left", padx=8)
         self.run_btn.state(["disabled"])
-        self._on_model_change()
         self.open_btn = ttk.Button(btn_frame, text="Open Output", command=self._open_output)
         self.open_btn.pack(side="left", padx=8)
         self.open_btn.state(["disabled"])
 
-    def _on_model_change(self, *args):
-        is_wd = self.model_var.get() == "WD-Tagger-v3"
-        if is_wd:
-            self.use_exif_var.set(False)
-            self.exif_check.state(["disabled"])
-            self.prompt_entry.state(["disabled"])
-        else:
-            self.exif_check.state(["!disabled"])
-            self.prompt_entry.state(["!disabled"])
+    def _set_running(self, running: bool):
+        self.running = running
+        state = ["disabled"] if running else ["!disabled"]
+        self.browse_btn.state(state)
+        self.run_btn.state(state)
+        self.topn_spin.state(state)
+        if not running and self.output_dir and self.output_dir.exists():
+            self.open_btn.state(["!disabled"])
 
     def _browse_folder(self):
         folder = filedialog.askdirectory(title="Select emotion image folder")
@@ -163,27 +132,8 @@ class App:
         )
         self.run_btn.state(["!disabled"])
 
-    def _set_running(self, running: bool):
-        self.running = running
-        state = ["disabled"] if running else ["!disabled"]
-        inv_state = ["!disabled"] if running else ["disabled"]
-        self.browse_btn.state(state)
-        self.run_btn.state(state)
-        self.topn_spin.state(state)
-        self.prompt_entry.state(state)
-        if not running and self.output_dir and self.output_dir.exists():
-            self.open_btn.state(["!disabled"])
-
     def _run_filter(self):
         if self.emotion_groups is None:
-            return
-
-        model_name = self.model_var.get()
-        prompt = self.prompt_var.get()
-        use_exif = self.use_exif_var.get()
-
-        if model_name != "WD-Tagger-v3" and not use_exif and "{emotion}" not in prompt:
-            messagebox.showerror("Error", "Prompt template must contain {emotion} placeholder.")
             return
 
         self._set_running(True)
@@ -192,72 +142,35 @@ class App:
 
         input_folder = Path(self.folder_var.get())
         self.output_dir = input_folder.parent / f"{input_folder.name}_filtered"
-
-        # Extract EXIF prompts if requested (CLIP only)
-        exif_prompts = None
-        if model_name != "WD-Tagger-v3" and use_exif:
-            self.status_var.set("Reading EXIF prompts from images...")
-            self.root.update_idletasks()
-            exif_prompts = extract_prompts_by_emotion(self.emotion_groups)
-            found = sum(1 for v in exif_prompts.values() if v)
-            self.status_var.set(
-                f"EXIF prompts found for {found}/{len(exif_prompts)} emotions. Loading model..."
-            )
-        elif model_name == "WD-Tagger-v3":
-            self.status_var.set("Loading WD Tagger v3 model...")
-        else:
-            self.status_var.set("Loading CLIP model...")
+        self.status_var.set("Loading WD Tagger v3 model...")
 
         thread = threading.Thread(
             target=self._worker,
             args=(
                 self.emotion_groups,
-                self.model_var.get(),
-                prompt,
                 self.topn_var.get(),
                 self.output_dir,
-                exif_prompts,
             ),
             daemon=True,
         )
         thread.start()
 
-    def _worker(self, emotion_groups, model_name, prompt_template, top_n, output_dir, exif_prompts=None):
+    def _worker(self, emotion_groups, top_n, output_dir):
         try:
+            from wd_scorer import WDTaggerScorer
             total_images = sum(len(v) for v in emotion_groups.values())
 
-            if model_name == "WD-Tagger-v3":
-                from wd_scorer import WDTaggerScorer
-                scorer = WDTaggerScorer()
-                self.queue.put(("status", "Analyzing images with WD Tagger..."))
+            scorer = WDTaggerScorer()
+            self.queue.put(("status", "Analyzing images with WD Tagger..."))
 
-                def wd_progress_cb(current, total):
-                    pct = current / total * 100
-                    self.queue.put(("progress", pct))
-                    self.queue.put(("status", f"Analyzing images... {current}/{total}"))
+            def progress_cb(current, total):
+                pct = current / total * 100
+                self.queue.put(("progress", pct))
+                self.queue.put(("status", f"Analyzing images... {current}/{total}"))
 
-                scored = scorer.score_all(
-                    emotion_groups, batch_size=16, progress_callback=wd_progress_cb,
-                )
-            else:
-                scorer = CLIPScorer(model_name)
-                self.queue.put(("status", "Scoring images..."))
-
-                def clip_progress_cb(emotion, img_cur, img_total, emo_cur, emo_total):
-                    done_before = sum(
-                        len(emotion_groups[e])
-                        for e in sorted(emotion_groups.keys())[:emo_cur - 1]
-                    )
-                    pct = (done_before + img_cur) / total_images * 100
-                    self.queue.put(("progress", pct))
-                    self.queue.put(("status", f"Processing: {emotion} ({img_total} images)... {img_cur}/{img_total}"))
-                    self.queue.put(("emo_status", f"Emotions: {emo_cur}/{emo_total} complete"))
-
-                scored = scorer.score_all(
-                    emotion_groups, prompt_template,
-                    batch_size=16, progress_callback=clip_progress_cb,
-                    exif_prompts=exif_prompts,
-                )
+            scored = scorer.score_all(
+                emotion_groups, batch_size=16, progress_callback=progress_cb,
+            )
 
             self.queue.put(("status", "Copying files..."))
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -265,9 +178,7 @@ class App:
 
             config = {
                 "top_n": top_n,
-                "model": model_name,
-                "prompt_template": prompt_template,
-                "use_exif": exif_prompts is not None,
+                "model": "WD-Tagger-v3",
             }
             generate_report(scored, top_n, config, output_dir)
 
