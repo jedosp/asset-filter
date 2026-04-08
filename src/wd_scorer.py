@@ -1,6 +1,6 @@
-"""WD Tagger v3 scoring engine for emotion images."""
+"""Camie Tagger v2 scoring engine for emotion images."""
 
-import csv
+import json
 import logging
 from pathlib import Path
 from typing import Any, Callable
@@ -11,55 +11,101 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-MODEL_REPO = "SmilingWolf/wd-vit-tagger-v3"
-MODEL_FILENAME = "model.onnx"
-TAGS_FILENAME = "selected_tags.csv"
-IMAGE_SIZE = 448
+MODEL_REPO = "Camais03/camie-tagger-v2"
+MODEL_FILENAME = "camie-tagger-v2.onnx"
+METADATA_FILENAME = "camie-tagger-v2-metadata.json"
+IMAGE_SIZE = 512
+
+# ImageNet normalization constants
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+# Padding color derived from ImageNet mean (int RGB)
+PAD_COLOR = (124, 116, 104)
+
+# Tags indicating anatomical defects or low quality
+NEGATIVE_TAGS = [
+    "bad_anatomy", "bad_hands", "bad_proportions", "bad_feet",
+    "extra_fingers", "fewer_fingers", "extra_limbs", "missing_fingers",
+    "extra_arms", "extra_legs", "missing_arms", "missing_legs",
+    "fused_fingers", "too_many_fingers",
+    "mutated_hands", "mutation", "deformed",
+    "ugly", "blurry", "anatomical_nonsense",
+    "extra_digit", "fewer_digits",
+]
 
 
-class WDTaggerScorer:
+class CamieTaggerScorer:
     def __init__(self):
         import onnxruntime as ort
 
-        logger.info("Downloading WD Tagger v3 model...")
+        logger.info("Downloading Camie Tagger v2 model...")
         model_path = hf_hub_download(MODEL_REPO, MODEL_FILENAME)
-        tags_path = hf_hub_download(MODEL_REPO, TAGS_FILENAME)
+        metadata_path = hf_hub_download(MODEL_REPO, METADATA_FILENAME)
 
         logger.info("Loading ONNX model...")
-        self.session = ort.InferenceSession(
-            model_path,
-            providers=["CPUExecutionProvider"],
-        )
+        providers = []
+        available = ort.get_available_providers()
+        if "DmlExecutionProvider" in available:
+            providers.append("DmlExecutionProvider")
+        providers.append("CPUExecutionProvider")
+        self.session = ort.InferenceSession(model_path, providers=providers)
+        logger.info("ONNX providers: %s", self.session.get_providers())
         self.input_name = self.session.get_inputs()[0].name
 
-        # Load tag vocabulary
+        # Load tag vocabulary from metadata JSON
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+        dataset_info = metadata["dataset_info"]
+        tag_mapping = dataset_info["tag_mapping"]
+        idx_to_tag = tag_mapping["idx_to_tag"]  # str(idx) → tag_name
+        self.tag_to_category: dict[str, str] = tag_mapping["tag_to_category"]
+
+        # Build ordered tag list and reverse lookup
         self.tag_names: list[str] = []
         self.tag_to_index: dict[str, int] = {}
-        with open(tags_path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for i, row in enumerate(reader):
-                tag = row["name"]
-                self.tag_names.append(tag)
-                self.tag_to_index[tag] = i
+        for i in range(len(idx_to_tag)):
+            tag = idx_to_tag[str(i)]
+            self.tag_names.append(tag)
+            self.tag_to_index[tag] = i
 
         logger.info("Loaded %d tags from vocabulary.", len(self.tag_names))
 
+        # Pre-resolve negative tag indices
+        self.negative_indices: list[int] = []
+        matched_neg = []
+        for tag in NEGATIVE_TAGS:
+            if tag in self.tag_to_index:
+                self.negative_indices.append(self.tag_to_index[tag])
+                matched_neg.append(tag)
+        logger.info("Negative tags matched: %d/%d (%s)", len(matched_neg), len(NEGATIVE_TAGS), matched_neg)
+
     @staticmethod
     def _preprocess(image_path: Path) -> np.ndarray:
-        """Preprocess image for WD Tagger: RGBA→RGB on white, pad to square, resize, BGR."""
-        img = Image.open(image_path).convert("RGBA")
-        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        bg.paste(img, mask=img)
-        img = bg.convert("RGB")
+        """Preprocess image for Camie Tagger: RGBA→RGB, pad to square, resize 512, ImageNet normalize."""
+        img = Image.open(image_path)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        else:
+            img = img.convert("RGB")
 
-        # Pad to square
-        max_dim = max(img.size)
-        canvas = Image.new("RGB", (max_dim, max_dim), (255, 255, 255))
-        canvas.paste(img, ((max_dim - img.width) // 2, (max_dim - img.height) // 2))
-        img = canvas.resize((IMAGE_SIZE, IMAGE_SIZE), Image.BICUBIC)
+        # Resize maintaining aspect ratio
+        w, h = img.size
+        if w > h:
+            new_w, new_h = IMAGE_SIZE, int(IMAGE_SIZE * h / w)
+        else:
+            new_w, new_h = int(IMAGE_SIZE * w / h), IMAGE_SIZE
+        img = img.resize((new_w, new_h), Image.LANCZOS)
 
-        arr = np.array(img, dtype=np.float32)
-        arr = arr[:, :, ::-1]  # RGB → BGR
+        # Pad to square with ImageNet mean color
+        canvas = Image.new("RGB", (IMAGE_SIZE, IMAGE_SIZE), PAD_COLOR)
+        canvas.paste(img, ((IMAGE_SIZE - new_w) // 2, (IMAGE_SIZE - new_h) // 2))
+
+        # Convert to float32 [0, 1], then apply ImageNet normalization
+        arr = np.array(canvas, dtype=np.float32) / 255.0
+        arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
+        # HWC → CHW
+        arr = arr.transpose(2, 0, 1)
         return arr
 
     def _find_tag_indices(self, emotion: str) -> list[int]:
@@ -102,10 +148,10 @@ class WDTaggerScorer:
         for emotion in emotions:
             indices = self._find_tag_indices(emotion)
             if not indices:
-                logger.warning("No matching WD tag for emotion: '%s'", emotion)
+                logger.warning("No matching tag for emotion: '%s'", emotion)
             else:
                 matched = [self.tag_names[i] for i in indices]
-                logger.info("Emotion '%s' → WD tags: %s", emotion, matched)
+                logger.info("Emotion '%s' → tags: %s", emotion, matched)
             emotion_tag_indices[emotion] = indices
 
         # Pre-resolve EXIF tag indices per emotion (excluding emotion tag itself)
@@ -125,7 +171,7 @@ class WDTaggerScorer:
                 if tags_used:
                     logger.info("Emotion '%s' EXIF tags: %s", emotion, tags_used)
                 else:
-                    logger.info("Emotion '%s': no matching EXIF tags in WD vocabulary", emotion)
+                    logger.info("Emotion '%s': no matching EXIF tags in vocabulary", emotion)
 
         # Flatten all images for single-pass inference
         all_items: list[tuple[str, Path, int]] = []
@@ -144,15 +190,24 @@ class WDTaggerScorer:
                     arr = self._preprocess(p)
                 except Exception as e:
                     logger.warning("Failed to preprocess %s: %s", p, e)
-                    arr = np.full((IMAGE_SIZE, IMAGE_SIZE, 3), 255.0, dtype=np.float32)
+                    arr = np.zeros((3, IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32)
                 batch_arrays.append(arr)
 
             batch_input = np.stack(batch_arrays)
-            raw = self.session.run(None, {self.input_name: batch_input})[0]
+            outputs = self.session.run(None, {self.input_name: batch_input})
 
-            # Apply sigmoid if model outputs raw logits
-            if raw.max() > 1.0 or raw.min() < 0.0:
-                raw = 1.0 / (1.0 + np.exp(-np.clip(raw, -500, 500)))
+            # Camie v2 outputs: initial(70527), refined(70527), candidates(256)
+            # refined only updates top-256 candidates; unselected tags stay near 0.
+            # Use element-wise max of initial and refined for full coverage.
+            initial = outputs[0]
+            if len(outputs) >= 2:
+                refined = outputs[1]
+                raw = np.maximum(initial, refined)
+            else:
+                raw = initial
+
+            # Apply sigmoid (model outputs raw logits)
+            raw = 1.0 / (1.0 + np.exp(-np.clip(raw, -500, 500)))
 
             for j, (_, p, _) in enumerate(batch):
                 image_probs[p] = raw[j]
@@ -175,6 +230,11 @@ class WDTaggerScorer:
                         score = 0.5 * emotion_score + 0.5 * exif_score
                     else:
                         score = emotion_score
+
+                    # Apply negative tag penalty
+                    if self.negative_indices:
+                        neg_score = float(np.mean([probs[idx] for idx in self.negative_indices]))
+                        score = score * (1.0 - neg_score)
                 else:
                     score = 0.0
                 scored_items.append({"path": path, "score": score, "number": number})
