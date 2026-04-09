@@ -15,8 +15,7 @@ class AestheticScorer:
     Lifecycle:
     1. __init__(): Set cache dir, no model loading yet
     2. load_model(): Downloads (if needed) and loads SigLIP + MLP head
-    3. score_batch(): Preprocess images → extract features → predict scores
-    4. score_all(): Score all images with progress callback
+    3. score_batch_pil(): Score pre-loaded PIL images → predict scores (1-10)
     """
 
     def __init__(self, cache_dir: str | None = None):
@@ -53,44 +52,6 @@ class AestheticScorer:
         if progress_callback:
             progress_callback(f"Aesthetic Predictor loaded ({self.device}).")
 
-    def score_batch(self, image_paths: list[Path]) -> list[float]:
-        """Score a batch of images. Returns list of scores (1-10 scale)."""
-        import torch
-        from PIL import Image
-
-        images = []
-        valid_indices = []
-
-        for i, path in enumerate(image_paths):
-            try:
-                img = Image.open(path).convert("RGB")
-                images.append(img)
-                valid_indices.append(i)
-            except Exception as e:
-                logger.warning("Failed to load image %s: %s", path, e)
-
-        result = [0.0] * len(image_paths)
-
-        if not images:
-            return result
-
-        try:
-            inputs = self.preprocessor(images=images, return_tensors="pt")
-            pixel_values = inputs["pixel_values"].to(self.device)
-            with torch.no_grad():
-                logits = self.model(pixel_values).logits.squeeze(-1).float()
-            batch_scores = logits.cpu().tolist()
-            if isinstance(batch_scores, float):
-                batch_scores = [batch_scores]
-        except Exception as e:
-            logger.warning("Batch inference failed: %s", e)
-            return result
-
-        for idx, score in zip(valid_indices, batch_scores):
-            result[idx] = max(1.0, min(10.0, score))
-
-        return result
-
     def score_batch_pil(self, items: list[tuple]) -> dict[Path, float]:
         """Score a batch of pre-loaded PIL images. items: [(Path, PIL.Image), ...]"""
         import torch
@@ -124,25 +85,5 @@ class AestheticScorer:
             logger.warning("Batch inference failed: %s", e)
             for path in paths:
                 results[path] = 0.0
-
-        return results
-
-    def score_all(
-        self,
-        image_paths: list[Path],
-        batch_size: int = 4,
-        progress_callback: Callable[[int, int], None] | None = None,
-    ) -> dict[Path, float]:
-        """Score all images. Returns {Path: score} mapping."""
-        results = {}
-        total = len(image_paths)
-
-        for i in range(0, total, batch_size):
-            batch = image_paths[i : i + batch_size]
-            scores = self.score_batch(batch)
-            for path, score in zip(batch, scores):
-                results[path] = score
-            if progress_callback:
-                progress_callback(min(i + batch_size, total), total)
 
         return results
