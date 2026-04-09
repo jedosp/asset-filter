@@ -13,12 +13,12 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 - **Face Framing** — MediaPipe 얼굴 인식으로 표정 가시성 평가 (Hard Filter / Weighted 모드)
 - **다차원 스코어링** — 감정 + 미학 + 얼굴 가중치를 조합한 통합 랭킹
 - **EXIF 태그 결합 스코어링** — NovelAI char_captions 메타데이터를 활용해 정확도 향상
-- **해부학 결함 자동 감지** — bad_anatomy, extra_fingers 등 22개 결함 태그로 불량 이미지 자동 감점
+- **해부학 결함 자동 감지** — 22개 결함 태그 중 최대값(max)으로 불량 이미지 자동 감점
 - **DirectML GPU 가속** — Windows GPU 자동 감지, GPU 없으면 CPU 자동 전환
 - **이미지 1회 로딩** — 모든 스코어러가 동일 이미지를 공유, I/O 최소화
 - 전체 이미지를 단일 패스로 추론 (감정 수가 많아도 속도 일정)
 - 모델 다운로드 / 이미지 분석 단계별 프로그레스 바
-- 필터링 결과를 `report.json`으로 저장
+- 필터링 결과를 `report.json`으로 저장 (`neg_score` 포함)
 
 ---
 
@@ -26,10 +26,19 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 
 ### 릴리즈 (일반 사용자)
 
-1. [Releases](https://github.com/jedosp/asset-filter/releases) 페이지에서 ZIP 다운로드
-2. 압축 해제
-3. `AssetFilter.exe` 더블클릭
-4. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~900MB)
+[Releases](https://github.com/jedosp/asset-filter/releases) 페이지에서 다운로드:
+
+| 파일 | 설명 |
+|------|------|
+| `AssetFilter-v1.0.0-cpu.zip` | 임베디드 Python + CPU torch 포함 (설치 불필요) |
+| `AssetFilter-v1.0.0-cuda-split.*` | 임베디드 Python + CUDA torch 포함 (분할 압축) |
+
+1. ZIP 압축 해제
+2. `run.bat` 또는 `AssetFilter.exe` 실행
+3. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~900MB)
+
+> **AssetFilter.exe** — CPU 전용 독립 실행 파일. Python 환경 없이 단독 실행 가능.
+> **run.bat** — 임베디드 Python 환경으로 실행. CUDA ZIP을 사용하면 GPU 가속됩니다.
 
 ### 소스에서 실행 (개발용)
 
@@ -39,7 +48,7 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-### 빌드
+### 빌드 (독립 실행 파일)
 
 ```bash
 pip install pyinstaller
