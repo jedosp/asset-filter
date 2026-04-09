@@ -30,7 +30,7 @@ class AestheticScorer:
     def load_model(self, progress_callback: Callable[[str], None] | None = None):
         """Load SigLIP + MLP aesthetic head. Downloads on first run (~900MB)."""
         if progress_callback:
-            progress_callback("Downloading Aesthetic Predictor model (first run only)...")
+            progress_callback("Downloading Aesthetic Predictor model (~3.5GB, first run only)...")
 
         import torch
         from aesthetic_predictor_v2_5 import convert_v2_5_from_siglip
