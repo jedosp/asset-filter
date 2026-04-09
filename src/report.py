@@ -42,6 +42,8 @@ def generate_report(
                 entry["aesthetic_score"] = round(item["aesthetic_score"], 2)
             if "face_score" in item:
                 entry["face_score"] = round(item["face_score"], 4)
+            if "neg_score" in item and item["neg_score"] > 0:
+                entry["neg_score"] = round(item["neg_score"], 4)
             if "combined_score" in item:
                 entry["combined_score"] = round(item["combined_score"], 4)
             else:

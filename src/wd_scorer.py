@@ -223,7 +223,7 @@ class CamieTaggerScorer:
                     else:
                         score = emotion_score
                     if self.negative_indices:
-                        neg_score = float(np.mean([probs[idx] for idx in self.negative_indices]))
+                        neg_score = float(np.max([probs[idx] for idx in self.negative_indices]))
                 else:
                     score = 0.0
                 scored_items.append({"path": path, "score": score, "number": number, "neg_score": neg_score})
