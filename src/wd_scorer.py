@@ -220,6 +220,7 @@ class CamieTaggerScorer:
             scored_items = []
             for path, number in emotion_groups[emotion]:
                 probs = self.image_probs.get(path)
+                neg_score = 0.0
                 if probs is not None and tag_indices:
                     emotion_score = float(np.mean([probs[idx] for idx in tag_indices]))
                     if exif_indices:
@@ -229,15 +230,61 @@ class CamieTaggerScorer:
                         score = emotion_score
                     if self.negative_indices:
                         neg_score = float(np.mean([probs[idx] for idx in self.negative_indices]))
-                        score = score * (1.0 - neg_score)
                 else:
                     score = 0.0
-                scored_items.append({"path": path, "score": score, "number": number})
+                scored_items.append({"path": path, "score": score, "number": number, "neg_score": neg_score})
 
             scored_items.sort(key=lambda x: x["score"], reverse=True)
             results[emotion] = scored_items
 
         return results
+
+    def get_excluded_paths(
+        self,
+        exclude_tags: list[str],
+        emotion_groups: dict[str, list[tuple[Path, int]]],
+        exif_tags_by_emotion: dict[str, list[str]] | None = None,
+        threshold: float = 0.5,
+    ) -> set[Path]:
+        """Return paths where an exclude tag is detected but NOT in EXIF (unintended).
+
+        If EXIF contains the exclude tag, the feature is intentional → skip.
+        If EXIF does not contain the exclude tag and Camie detects it → exclude.
+        """
+        exclude_indices: dict[str, int] = {}
+        for tag in exclude_tags:
+            tag_clean = tag.strip().replace(" ", "_").lower()
+            if tag_clean in self.tag_to_index:
+                exclude_indices[tag_clean] = self.tag_to_index[tag_clean]
+        if not exclude_indices:
+            logger.warning("No exclude tags matched in vocabulary: %s", exclude_tags)
+            return set()
+        logger.info("Exclude tag indices resolved: %s", list(exclude_indices.keys()))
+
+        excluded = set()
+        for emotion, items in emotion_groups.items():
+            # Get EXIF tags for this emotion group
+            emo_exif = set(exif_tags_by_emotion.get(emotion, [])) if exif_tags_by_emotion else set()
+
+            # Determine which exclude tags to check (only those NOT in EXIF)
+            active_tags = {
+                tag: idx for tag, idx in exclude_indices.items()
+                if tag not in emo_exif
+            }
+            if not active_tags:
+                continue
+
+            for path, _ in items:
+                probs = self.image_probs.get(path)
+                if probs is None:
+                    continue
+                for tag, idx in active_tags.items():
+                    if probs[idx] > threshold:
+                        logger.info("Excluding %s: '%s' detected (%.3f > %.3f), not in EXIF",
+                                    path.name, tag, probs[idx], threshold)
+                        excluded.add(path)
+                        break
+        return excluded
 
     def score_all(
         self,
@@ -336,6 +383,7 @@ class CamieTaggerScorer:
             scored_items = []
             for path, number in emotion_groups[emotion]:
                 probs = image_probs.get(path)
+                neg_score = 0.0
                 if probs is not None and tag_indices:
                     emotion_score = float(np.mean([probs[idx] for idx in tag_indices]))
                     if exif_indices:
@@ -344,13 +392,11 @@ class CamieTaggerScorer:
                     else:
                         score = emotion_score
 
-                    # Apply negative tag penalty
                     if self.negative_indices:
                         neg_score = float(np.mean([probs[idx] for idx in self.negative_indices]))
-                        score = score * (1.0 - neg_score)
                 else:
                     score = 0.0
-                scored_items.append({"path": path, "score": score, "number": number})
+                scored_items.append({"path": path, "score": score, "number": number, "neg_score": neg_score})
 
             scored_items.sort(key=lambda x: x["score"], reverse=True)
             results[emotion] = scored_items
@@ -380,6 +426,19 @@ def compute_combined_scores(
     for emotion, items in emotion_scores.items():
         new_items = []
         filtered_count = 0
+
+        # Detect if emotion scoring is effectively dead (all zeros)
+        all_emotion_zero = all(item["score"] == 0.0 for item in items)
+        if all_emotion_zero and aesthetic_scores is not None:
+            # Fallback: use aesthetic 100% when Camie can't score this emotion
+            eff_emotion_w = 0.0
+            eff_aesthetic_w = 1.0
+            eff_face_w = 0.0
+            logger.info("Emotion '%s': no Camie tag match, falling back to aesthetic-only ranking", emotion)
+        else:
+            eff_emotion_w = emotion_weight
+            eff_aesthetic_w = aesthetic_weight
+            eff_face_w = face_weight
 
         for item in items:
             path = item["path"]
@@ -413,16 +472,21 @@ def compute_combined_scores(
             # Compute combined score
             if aes_norm is not None and face_mode == "weighted" and f_score is not None:
                 combined = (
-                    em_score * emotion_weight
-                    + aes_norm * aesthetic_weight
-                    + f_score * face_weight
+                    em_score * eff_emotion_w
+                    + aes_norm * eff_aesthetic_w
+                    + f_score * eff_face_w
                 )
             elif aes_norm is not None:
-                combined = em_score * emotion_weight + aes_norm * aesthetic_weight
+                combined = em_score * eff_emotion_w + aes_norm * eff_aesthetic_w
             elif face_mode == "weighted" and f_score is not None:
-                combined = em_score * emotion_weight + f_score * face_weight
+                combined = em_score * eff_emotion_w + f_score * eff_face_w
             else:
                 combined = em_score
+
+            # Apply negative tag penalty at combined level
+            neg = item.get("neg_score", 0.0)
+            if neg > 0:
+                combined = combined * (1.0 - neg)
 
             new_item["combined_score"] = combined
             new_item["score"] = combined
@@ -434,6 +498,8 @@ def compute_combined_scores(
         emotion_meta: dict[str, Any] = {}
         if filtered_count > 0:
             emotion_meta["filtered_by_face"] = filtered_count
+        if all_emotion_zero and aesthetic_scores is not None:
+            emotion_meta["fallback_aesthetic_only"] = True
         meta[emotion] = emotion_meta
 
     return results, meta

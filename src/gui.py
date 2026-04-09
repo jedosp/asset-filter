@@ -119,6 +119,22 @@ class App:
         self.face_threshold_spin.grid(row=srow, column=1, sticky="w", pady=2)
 
         srow += 1
+        self.exclude_label = ttk.Label(scoring_frame, text="Exclude Tags:")
+        self.exclude_label.grid(row=srow, column=0, sticky="w", pady=2)
+        self.exclude_tags_var = tk.StringVar(value="")
+        self.exclude_tags_entry = ttk.Entry(
+            scoring_frame, textvariable=self.exclude_tags_var, width=30,
+        )
+        self.exclude_tags_entry.grid(row=srow, column=1, columnspan=2, sticky="ew", pady=2)
+
+        srow += 1
+        self.exclude_hint = ttk.Label(
+            scoring_frame, text="comma-separated, e.g. glasses, red_eyes",
+            foreground="gray", font=("Segoe UI", 8),
+        )
+        self.exclude_hint.grid(row=srow, column=1, columnspan=2, sticky="w", pady=(0, 2))
+
+        srow += 1
         self.weight_sep = ttk.Separator(scoring_frame, orient="horizontal")
         self.weight_sep.grid(row=srow, column=0, columnspan=3, sticky="ew", pady=6)
 
@@ -229,6 +245,7 @@ class App:
         self.face_mode_combo.state(["disabled"] if running else ["readonly"])
         self.face_threshold_spin.state(state)
         self.min_aes_spin.state(state)
+        self.exclude_tags_entry.state(state)
         self.emotion_weight_spin.state(state)
         self.aesthetic_weight_spin.state(state)
         self.face_weight_spin.state(state)
@@ -452,6 +469,7 @@ class App:
                 else 0.0
             ),
             "min_aesthetic_quality": self.min_aes_var.get() if self.aesthetic_var.get() else 0.0,
+            "exclude_tags": [t.strip() for t in self.exclude_tags_var.get().split(",") if t.strip()],
         }
 
         thread = threading.Thread(
@@ -619,6 +637,23 @@ class App:
                 removed = before_count - after_count
                 if removed > 0:
                     self.queue.put(("status", f"Quality floor: {removed} images below {min_aes:.1f} removed."))
+
+            # Exclude tag filter (EXIF-aware)
+            exclude_tags = scoring_config.get("exclude_tags", [])
+            if exclude_tags:
+                excluded_paths = scorer.get_excluded_paths(
+                    exclude_tags, emotion_groups, exif_tags_by_emotion=exif_tags,
+                )
+                if excluded_paths:
+                    before_count = sum(len(v) for v in emotion_groups.values())
+                    emotion_groups = {
+                        emo: [(p, n) for p, n in items if p not in excluded_paths]
+                        for emo, items in emotion_groups.items()
+                    }
+                    emotion_groups = {k: v for k, v in emotion_groups.items() if v}
+                    after_count = sum(len(v) for v in emotion_groups.values())
+                    removed = before_count - after_count
+                    self.queue.put(("status", f"Exclude tags: {removed} images removed ({', '.join(exclude_tags)})."))
 
             scored = scorer.compute_emotion_scores(emotion_groups, exif_tags)
 
