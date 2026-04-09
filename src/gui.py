@@ -78,6 +78,18 @@ class App:
         self.aesthetic_check.grid(row=srow, column=0, columnspan=3, sticky="w", pady=2)
 
         srow += 1
+        self.min_aes_label = ttk.Label(scoring_frame, text="Min Quality:")
+        self.min_aes_label.grid(row=srow, column=0, sticky="w", padx=(20, 5), pady=2)
+        self.min_aes_var = tk.DoubleVar(value=3.0)
+        self.min_aes_spin = ttk.Spinbox(
+            scoring_frame, from_=1.0, to=10.0, increment=0.5,
+            textvariable=self.min_aes_var, width=6,
+        )
+        self.min_aes_spin.grid(row=srow, column=1, sticky="w", pady=2)
+        self.min_aes_hint = ttk.Label(scoring_frame, text="(1.0~10.0)", foreground="gray")
+        self.min_aes_hint.grid(row=srow, column=2, sticky="w", padx=5, pady=2)
+
+        srow += 1
         self.face_var = tk.BooleanVar(value=False)
         self.face_check = ttk.Checkbutton(
             scoring_frame, text="Enable Face Framing",
@@ -210,6 +222,7 @@ class App:
         self.face_check.state(state)
         self.face_mode_combo.state(["disabled"] if running else ["readonly"])
         self.face_threshold_spin.state(state)
+        self.min_aes_spin.state(state)
         self.emotion_weight_spin.state(state)
         self.aesthetic_weight_spin.state(state)
         self.face_weight_spin.state(state)
@@ -229,6 +242,13 @@ class App:
         face_on = self.face_var.get()
         face_mode = self.face_mode_var.get()
         face_weighted = face_on and face_mode == "Weighted"
+
+        # Min aesthetic quality
+        for w in (self.min_aes_label, self.min_aes_spin, self.min_aes_hint):
+            if aes_on:
+                w.grid()
+            else:
+                w.grid_remove()
 
         # Face sub-controls
         for w in (self.face_mode_label, self.face_mode_combo):
@@ -423,6 +443,7 @@ class App:
                 if face_on and face_mode == "weighted"
                 else 0.0
             ),
+            "min_aesthetic_quality": self.min_aes_var.get() if self.aesthetic_var.get() else 0.0,
         }
 
         thread = threading.Thread(
@@ -564,6 +585,20 @@ class App:
 
             if face_scorer_inst is not None:
                 face_scorer_inst.close()
+
+            # --- Global Aesthetic Floor ---
+            min_aes = scoring_config.get("min_aesthetic_quality", 0.0)
+            if aes_scorer is not None and min_aes > 1.0:
+                before_count = sum(len(v) for v in emotion_groups.values())
+                emotion_groups = {
+                    emo: [(p, n) for p, n in items if aesthetic_scores.get(p, min_aes) >= min_aes]
+                    for emo, items in emotion_groups.items()
+                }
+                emotion_groups = {k: v for k, v in emotion_groups.items() if v}
+                after_count = sum(len(v) for v in emotion_groups.values())
+                removed = before_count - after_count
+                if removed > 0:
+                    self.queue.put(("status", f"Aesthetic floor: {removed} images below {min_aes:.1f} removed."))
 
             # --- Camie emotion scoring (from accumulated probabilities) ---
             scored = scorer.compute_emotion_scores(emotion_groups, exif_tags)
