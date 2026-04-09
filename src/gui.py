@@ -486,8 +486,7 @@ class App:
 
     # Phase progress weight constants (must sum to 100)
     _PHASE_W_PREPARE = 10   # model download + loading
-    _PHASE_W_ANALYZE = 85   # batch scoring loop
-    _PHASE_W_FINALIZE = 5   # quality floor + ranking + copy
+    _PHASE_W_ANALYZE = 90   # batch scoring + ranking + export
 
     def _worker(self, emotion_groups, top_n, output_dir, scoring_config):
         try:
@@ -503,7 +502,7 @@ class App:
             face_weight = scoring_config["face_weight"]
 
             # ======== Phase 1/3: Model Preparation ========
-            self.queue.put(("phase", "Step 1/3 — Preparing models"))
+            self.queue.put(("phase", "Step 1/2 — Preparing models"))
             self.queue.put(("progress", 0))
 
             self.queue.put(("status", "Reading EXIF tags from images..."))
@@ -546,8 +545,8 @@ class App:
             self.queue.put(("progress_mode", "determinate"))
             self.queue.put(("progress", self._PHASE_W_PREPARE))
 
-            # ======== Phase 2/3: Image Analysis ========
-            self.queue.put(("phase", "Step 2/3 — Analyzing images"))
+            # ======== Phase 2/2: Image Analysis ========
+            self.queue.put(("phase", "Step 2/2 — Analyzing images"))
 
             all_paths = [path for items in emotion_groups.values() for path, _ in items]
             total = len(all_paths)
@@ -620,9 +619,7 @@ class App:
             if face_scorer_inst is not None:
                 face_scorer_inst.close()
 
-            # ======== Phase 3/3: Ranking & Export ========
-            self.queue.put(("phase", "Step 3/3 — Ranking & exporting"))
-            self.queue.put(("progress", phase2_base + phase2_span))
+            self.queue.put(("status", "Ranking & exporting..."))
 
             # Global Aesthetic Floor
             min_aes = scoring_config.get("min_aesthetic_quality", 0.0)
