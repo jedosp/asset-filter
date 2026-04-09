@@ -20,9 +20,13 @@ python -m PyInstaller ^
     --add-data "src\filter.py;." ^
     --add-data "src\report.py;." ^
     --add-data "src\wd_scorer.py;." ^
+    --add-data "src\aesthetic_scorer.py;." ^
+    --add-data "src\face_scorer.py;." ^
     --hidden-import onnxruntime ^
     --hidden-import huggingface_hub ^
     --hidden-import PIL ^
+    --hidden-import mediapipe ^
+    --hidden-import cv2 ^
     --collect-all onnxruntime ^
     --exclude-module torch ^
     --exclude-module open_clip ^

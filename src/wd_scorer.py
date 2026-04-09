@@ -102,16 +102,13 @@ class CamieTaggerScorer:
                 matched_neg.append(tag)
         logger.info("Negative tags matched: %d/%d (%s)", len(matched_neg), len(NEGATIVE_TAGS), matched_neg)
 
-    @staticmethod
-    def _preprocess(image_path: Path) -> np.ndarray:
-        """Preprocess image for Camie Tagger: RGBA→RGB, pad to square, resize 512, ImageNet normalize."""
-        img = Image.open(image_path)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        else:
-            img = img.convert("RGB")
+        self.image_probs: dict[Path, np.ndarray] = {}
 
-        # Resize maintaining aspect ratio
+    @staticmethod
+    def _preprocess_pil(img: Image.Image) -> np.ndarray:
+        """Preprocess PIL image for Camie Tagger: pad to square, resize 512, ImageNet normalize."""
+        img = img.convert("RGB")
+
         w, h = img.size
         if w > h:
             new_w, new_h = IMAGE_SIZE, int(IMAGE_SIZE * h / w)
@@ -119,16 +116,19 @@ class CamieTaggerScorer:
             new_w, new_h = int(IMAGE_SIZE * w / h), IMAGE_SIZE
         img = img.resize((new_w, new_h), Image.LANCZOS)
 
-        # Pad to square with ImageNet mean color
         canvas = Image.new("RGB", (IMAGE_SIZE, IMAGE_SIZE), PAD_COLOR)
         canvas.paste(img, ((IMAGE_SIZE - new_w) // 2, (IMAGE_SIZE - new_h) // 2))
 
-        # Convert to float32 [0, 1], then apply ImageNet normalization
         arr = np.array(canvas, dtype=np.float32) / 255.0
         arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
-        # HWC → CHW
         arr = arr.transpose(2, 0, 1)
         return arr
+
+    @staticmethod
+    def _preprocess(image_path: Path) -> np.ndarray:
+        """Preprocess image file for Camie Tagger."""
+        img = Image.open(image_path).convert("RGB")
+        return CamieTaggerScorer._preprocess_pil(img)
 
     def _find_tag_indices(self, emotion: str) -> list[int]:
         """
@@ -147,6 +147,97 @@ class CamieTaggerScorer:
             if word_tag in self.tag_to_index:
                 indices.append(self.tag_to_index[word_tag])
         return indices
+
+    def infer_batch_pil(self, items: list[tuple[Path, Image.Image]]) -> None:
+        """Run inference on pre-loaded PIL images, accumulate results in image_probs."""
+        if not items:
+            return
+        batch_arrays = []
+        paths = []
+        for path, img in items:
+            try:
+                arr = self._preprocess_pil(img)
+            except Exception as e:
+                logger.warning("Failed to preprocess %s: %s", path, e)
+                arr = np.zeros((3, IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32)
+            batch_arrays.append(arr)
+            paths.append(path)
+
+        batch_input = np.stack(batch_arrays)
+        outputs = self.session.run(None, {self.input_name: batch_input})
+
+        initial = outputs[0]
+        if len(outputs) >= 2:
+            refined = outputs[1]
+            raw = np.maximum(initial, refined)
+        else:
+            raw = initial
+        raw = 1.0 / (1.0 + np.exp(-np.clip(raw, -500, 500)))
+
+        for j, path in enumerate(paths):
+            self.image_probs[path] = raw[j]
+
+    def compute_emotion_scores(
+        self,
+        emotion_groups: dict[str, list[tuple[Path, int]]],
+        exif_tags: dict[str, list[str]] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Compute per-emotion scores from accumulated image_probs."""
+        emotions = sorted(emotion_groups.keys())
+
+        emotion_tag_indices: dict[str, list[int]] = {}
+        for emotion in emotions:
+            indices = self._find_tag_indices(emotion)
+            if not indices:
+                logger.warning("No matching tag for emotion: '%s'", emotion)
+            else:
+                matched = [self.tag_names[i] for i in indices]
+                logger.info("Emotion '%s' → tags: %s", emotion, matched)
+            emotion_tag_indices[emotion] = indices
+
+        exif_tag_indices: dict[str, list[int]] = {}
+        if exif_tags:
+            for emotion in emotions:
+                emotion_tag = emotion.replace(" ", "_").lower()
+                indices = []
+                tags_used = []
+                for tag in exif_tags.get(emotion, []):
+                    if tag == emotion_tag:
+                        continue
+                    if tag in self.tag_to_index:
+                        indices.append(self.tag_to_index[tag])
+                        tags_used.append(tag)
+                exif_tag_indices[emotion] = indices
+                if tags_used:
+                    logger.info("Emotion '%s' EXIF tags: %s", emotion, tags_used)
+                else:
+                    logger.info("Emotion '%s': no matching EXIF tags in vocabulary", emotion)
+
+        results: dict[str, list[dict[str, Any]]] = {}
+        for emotion in emotions:
+            tag_indices = emotion_tag_indices[emotion]
+            exif_indices = exif_tag_indices.get(emotion, []) if exif_tags else []
+            scored_items = []
+            for path, number in emotion_groups[emotion]:
+                probs = self.image_probs.get(path)
+                if probs is not None and tag_indices:
+                    emotion_score = float(np.mean([probs[idx] for idx in tag_indices]))
+                    if exif_indices:
+                        exif_score = float(np.mean([probs[idx] for idx in exif_indices]))
+                        score = 0.5 * emotion_score + 0.5 * exif_score
+                    else:
+                        score = emotion_score
+                    if self.negative_indices:
+                        neg_score = float(np.mean([probs[idx] for idx in self.negative_indices]))
+                        score = score * (1.0 - neg_score)
+                else:
+                    score = 0.0
+                scored_items.append({"path": path, "score": score, "number": number})
+
+            scored_items.sort(key=lambda x: x["score"], reverse=True)
+            results[emotion] = scored_items
+
+        return results
 
     def score_all(
         self,
@@ -265,3 +356,84 @@ class CamieTaggerScorer:
             results[emotion] = scored_items
 
         return results
+
+
+def compute_combined_scores(
+    emotion_scores: dict[str, list[dict[str, Any]]],
+    aesthetic_scores: dict[Path, float] | None = None,
+    face_scores: dict[Path, float] | None = None,
+    emotion_weight: float = 0.65,
+    aesthetic_weight: float = 0.35,
+    face_mode: str = "off",
+    face_threshold: float = 0.3,
+    face_weight: float = 0.15,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+    """
+    Combine emotion, aesthetic, and face scores into a unified ranking.
+
+    Returns (scored_results, meta) where meta has per-emotion metadata
+    such as filtered_by_face count.
+    """
+    results: dict[str, list[dict[str, Any]]] = {}
+    meta: dict[str, dict[str, Any]] = {}
+
+    for emotion, items in emotion_scores.items():
+        new_items = []
+        filtered_count = 0
+
+        for item in items:
+            path = item["path"]
+            em_score = item["score"]
+
+            new_item = {
+                "path": path,
+                "number": item["number"],
+                "emotion_score": em_score,
+            }
+
+            # Aesthetic score (normalize 1-10 → 0-1)
+            aes_norm = None
+            if aesthetic_scores is not None:
+                aes_raw = aesthetic_scores.get(path, 0.0)
+                new_item["aesthetic_score"] = aes_raw
+                aes_norm = max(0.0, min(1.0, (aes_raw - 1.0) / 9.0))
+
+            # Face score
+            f_score = None
+            if face_scores is not None:
+                f_score = face_scores.get(path, 0.3)
+                new_item["face_score"] = f_score
+
+            # Hard filter: discard images below threshold
+            if face_mode == "hard_filter" and f_score is not None:
+                if f_score < face_threshold:
+                    filtered_count += 1
+                    continue
+
+            # Compute combined score
+            if aes_norm is not None and face_mode == "weighted" and f_score is not None:
+                combined = (
+                    em_score * emotion_weight
+                    + aes_norm * aesthetic_weight
+                    + f_score * face_weight
+                )
+            elif aes_norm is not None:
+                combined = em_score * emotion_weight + aes_norm * aesthetic_weight
+            elif face_mode == "weighted" and f_score is not None:
+                combined = em_score * emotion_weight + f_score * face_weight
+            else:
+                combined = em_score
+
+            new_item["combined_score"] = combined
+            new_item["score"] = combined
+            new_items.append(new_item)
+
+        new_items.sort(key=lambda x: x["score"], reverse=True)
+        results[emotion] = new_items
+
+        emotion_meta: dict[str, Any] = {}
+        if filtered_count > 0:
+            emotion_meta["filtered_by_face"] = filtered_count
+        meta[emotion] = emotion_meta
+
+    return results, meta

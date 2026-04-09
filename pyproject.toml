@@ -1,20 +1,23 @@
 [project]
 name = "asset-filter"
-version = "0.4.0"
-description = "NovelAI 캐릭터 감정 이미지 자동 필터링 도구 (Camie Tagger v2)"
+version = "1.0.0"
+description = "NovelAI 캐릭터 감정 이미지 자동 필터링 도구 (Camie Tagger v2 + Aesthetic Predictor V2.5)"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "GPL-3.0-only"}
 requires-python = ">=3.10"
 authors = [
     {name = "jedosp"}
 ]
-keywords = ["novelai", "camie-tagger", "emotion-filter", "anime", "image-classification"]
+keywords = ["novelai", "camie-tagger", "emotion-filter", "anime", "image-classification", "aesthetic-predictor"]
 
 dependencies = [
     "onnxruntime-directml",
     "huggingface_hub",
     "numpy",
     "Pillow",
+    "aesthetic-predictor-v2-5",
+    "transformers",
+    "mediapipe",
 ]
 
 [project.urls]
