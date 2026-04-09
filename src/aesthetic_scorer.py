@@ -27,7 +27,7 @@ class AestheticScorer:
         self.device = "cpu"
 
     def load_model(self, progress_callback: Callable[[str], None] | None = None):
-        """Load SigLIP + MLP aesthetic head. Downloads on first run (~900MB)."""
+        """Load SigLIP + MLP aesthetic head. Downloads on first run (~3.5GB)."""
         if progress_callback:
             progress_callback("Downloading Aesthetic Predictor model (~3.5GB, first run only)...")
 

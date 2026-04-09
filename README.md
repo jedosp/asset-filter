@@ -35,7 +35,7 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 
 1. ZIP 압축 해제
 2. `run.bat` 또는 `AssetFilter.exe` 실행
-3. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~900MB)
+3. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~3.5GB)
 
 > **AssetFilter.exe** — CPU 전용 독립 실행 파일. Python 환경 없이 단독 실행 가능.
 > **run.bat** — 임베디드 Python 환경으로 실행. CUDA ZIP을 사용하면 GPU 가속됩니다.
