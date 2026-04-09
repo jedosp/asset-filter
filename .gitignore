@@ -16,7 +16,6 @@ __pycache__/
 build/
 dist/
 *.spec
-build.bat
 build_log.txt
 
 # OS

@@ -42,7 +42,7 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 ### 소스에서 실행 (개발용)
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install torch --index-url https://download.pytorch.org/whl/cu126
 pip install -r requirements.txt
 python src/main.py
 ```
