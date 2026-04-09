@@ -513,6 +513,7 @@ class App:
                 except Exception as e:
                     logger.warning("Aesthetic scoring unavailable: %s", e)
                     self.queue.put(("status", f"Aesthetic scoring unavailable: {e}"))
+                    aes_scorer = None
 
             face_scorer_inst = None
             if face_enabled:
