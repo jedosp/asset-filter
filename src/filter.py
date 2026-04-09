@@ -24,7 +24,7 @@ def filter_and_copy(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for emotion, items in sorted(scored.items()):
-        selected = [item for item in items[:top_n] if item["score"] > min_score]
+        selected = [item for item in items[:top_n] if item["score"] >= min_score]
         if not selected:
             logger.warning("No images above min_score for emotion: %s", emotion)
             continue

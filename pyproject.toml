@@ -1,6 +1,6 @@
 [project]
 name = "asset-filter"
-version = "1.0.0"
+version = "1.0.1"
 description = "NovelAI 캐릭터 감정 이미지 자동 필터링 도구 (Camie Tagger v2 + Aesthetic Predictor V2.5)"
 readme = "README.md"
 license = {text = "GPL-3.0-only"}
