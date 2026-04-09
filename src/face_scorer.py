@@ -143,6 +143,32 @@ class FaceFramingScorer:
             logger.warning("Face detection failed: %s", e)
             return self.NO_FACE_SCORE
 
+    def score_batch_pil(self, items: list[tuple]) -> dict:
+        """Score multiple pre-loaded PIL images in parallel using threads.
+        items: [(Path, PIL.Image), ...]
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results = {}
+        if not items:
+            return results
+
+        def _score_one(path_img):
+            path, img = path_img
+            return path, self.score_single_pil(img)
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(_score_one, item): item[0] for item in items}
+            for future in as_completed(futures):
+                try:
+                    path, score = future.result()
+                    results[path] = score
+                except Exception as e:
+                    p = futures[future]
+                    logger.warning("Face scoring failed for %s: %s", p, e)
+                    results[p] = self.NO_FACE_SCORE
+        return results
+
     def score_all(
         self,
         image_paths: list[Path],

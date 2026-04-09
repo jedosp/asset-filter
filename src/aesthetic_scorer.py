@@ -25,6 +25,7 @@ class AestheticScorer:
             os.environ.setdefault("HF_HOME", cache_dir)
         self.model = None
         self.preprocessor = None
+        self.device = "cpu"
 
     def load_model(self, progress_callback: Callable[[str], None] | None = None):
         """Load SigLIP + MLP aesthetic head. Downloads on first run (~900MB)."""
@@ -40,8 +41,17 @@ class AestheticScorer:
         )
         self.model.eval()
 
+        # Move to GPU if available
+        if torch.cuda.is_available():
+            self.device = "cuda"
+            self.model = self.model.to("cuda")
+            logger.info("Aesthetic Predictor using CUDA GPU: %s", torch.cuda.get_device_name(0))
+        else:
+            self.device = "cpu"
+            logger.info("Aesthetic Predictor using CPU (no CUDA GPU found).")
+
         if progress_callback:
-            progress_callback("Aesthetic Predictor loaded.")
+            progress_callback(f"Aesthetic Predictor loaded ({self.device}).")
 
     def score_batch(self, image_paths: list[Path]) -> list[float]:
         """Score a batch of images. Returns list of scores (1-10 scale)."""
@@ -66,9 +76,10 @@ class AestheticScorer:
 
         try:
             inputs = self.preprocessor(images=images, return_tensors="pt")
+            pixel_values = inputs["pixel_values"].to(self.device)
             with torch.no_grad():
-                logits = self.model(inputs["pixel_values"]).logits.squeeze(-1).float()
-            batch_scores = logits.tolist()
+                logits = self.model(pixel_values).logits.squeeze(-1).float()
+            batch_scores = logits.cpu().tolist()
             if isinstance(batch_scores, float):
                 batch_scores = [batch_scores]
         except Exception as e:
@@ -101,9 +112,10 @@ class AestheticScorer:
 
         try:
             inputs = self.preprocessor(images=images, return_tensors="pt")
+            pixel_values = inputs["pixel_values"].to(self.device)
             with torch.no_grad():
-                logits = self.model(inputs["pixel_values"]).logits.squeeze(-1).float()
-            batch_scores = logits.tolist()
+                logits = self.model(pixel_values).logits.squeeze(-1).float()
+            batch_scores = logits.cpu().tolist()
             if isinstance(batch_scores, float):
                 batch_scores = [batch_scores]
             for path, score in zip(paths, batch_scores):

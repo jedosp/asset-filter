@@ -476,7 +476,7 @@ class App:
             aesthetic_scores: dict = {}
             face_scores: dict = {}
             camie_batch_size = 16
-            aes_batch_size = 4
+            aes_batch_size = 16
 
             # In hard_filter mode, run face BEFORE aesthetic to skip rejected images
             face_first = (
@@ -502,9 +502,9 @@ class App:
 
                 # 2) Face scoring first (when hard_filter — saves aesthetic work)
                 if face_scorer_inst is not None and face_first:
-                    for p in chunk_paths:
-                        if p in pil_images:
-                            face_scores[p] = face_scorer_inst.score_single_pil(pil_images[p])
+                    face_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
+                    if face_items:
+                        face_scores.update(face_scorer_inst.score_batch_pil(face_items))
 
                 # 3) Aesthetic scoring (skip face-rejected images in hard_filter)
                 if aes_scorer is not None:
@@ -523,9 +523,9 @@ class App:
 
                 # 4) Face scoring (when NOT hard_filter — weighted or face-only)
                 if face_scorer_inst is not None and not face_first:
-                    for p in chunk_paths:
-                        if p in pil_images:
-                            face_scores[p] = face_scorer_inst.score_single_pil(pil_images[p])
+                    face_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
+                    if face_items:
+                        face_scores.update(face_scorer_inst.score_batch_pil(face_items))
 
                 # Free loaded images
                 for img in pil_images.values():
