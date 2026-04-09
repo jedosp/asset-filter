@@ -28,6 +28,10 @@ class App:
         self.output_dir: Path | None = None
         self.running = False
 
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # not paused
+
         self._build_ui()
         self._poll_queue()
 
@@ -186,6 +190,12 @@ class App:
         self.run_btn = ttk.Button(btn_frame, text="▶ Run Filter", command=self._run_filter)
         self.run_btn.pack(side="left", padx=8)
         self.run_btn.state(["disabled"])
+        self.pause_btn = ttk.Button(btn_frame, text="⏸ Pause", command=self._toggle_pause)
+        self.pause_btn.pack(side="left", padx=8)
+        self.pause_btn.state(["disabled"])
+        self.stop_btn = ttk.Button(btn_frame, text="⏹ Stop", command=self._stop_filter)
+        self.stop_btn.pack(side="left", padx=8)
+        self.stop_btn.state(["disabled"])
         self.open_btn = ttk.Button(btn_frame, text="Open Output", command=self._open_output)
         self.open_btn.pack(side="left", padx=8)
         self.open_btn.state(["disabled"])
@@ -203,6 +213,13 @@ class App:
         self.emotion_weight_spin.state(state)
         self.aesthetic_weight_spin.state(state)
         self.face_weight_spin.state(state)
+        if running:
+            self.pause_btn.state(["!disabled"])
+            self.stop_btn.state(["!disabled"])
+        else:
+            self.pause_btn.state(["disabled"])
+            self.stop_btn.state(["disabled"])
+            self.pause_btn.configure(text="⏸ Pause")
         if not running and self.output_dir and self.output_dir.exists():
             self.open_btn.state(["!disabled"])
 
@@ -377,6 +394,8 @@ class App:
         self._set_running(True)
         self.progress_var.set(0)
         self.emo_status_var.set("")
+        self._stop_event.clear()
+        self._pause_event.set()
 
         input_folder = Path(self.folder_var.get())
         self.output_dir = input_folder.parent / f"{input_folder.name}_filtered"
@@ -486,6 +505,11 @@ class App:
             )
 
             for i in range(0, total, camie_batch_size):
+                if self._stop_event.is_set():
+                    self.queue.put(("cancelled", "Processing stopped by user."))
+                    return
+                self._pause_event.wait()
+
                 chunk_paths = all_paths[i : i + camie_batch_size]
 
                 # Load images once for this chunk
@@ -601,6 +625,10 @@ class App:
                     self.status_var.set(msg_data)
                     self.emo_status_var.set("")
                     messagebox.showinfo("Complete", msg_data)
+                elif msg_type == "cancelled":
+                    self._set_running(False)
+                    self.status_var.set(msg_data)
+                    self.emo_status_var.set("")
                 elif msg_type == "error":
                     self._set_running(False)
                     self.status_var.set(f"Error: {msg_data}")
@@ -609,6 +637,22 @@ class App:
             pass
 
         self.root.after(100, self._poll_queue)
+
+    def _toggle_pause(self):
+        if self._pause_event.is_set():
+            self._pause_event.clear()
+            self.pause_btn.configure(text="▶ Resume")
+            self.status_var.set("Paused.")
+        else:
+            self._pause_event.set()
+            self.pause_btn.configure(text="⏸ Pause")
+            self.status_var.set("Resumed.")
+
+    def _stop_filter(self):
+        self._stop_event.set()
+        self._pause_event.set()  # unblock if paused
+        self.stop_btn.state(["disabled"])
+        self.pause_btn.state(["disabled"])
 
     def _open_output(self):
         if self.output_dir and self.output_dir.exists():
