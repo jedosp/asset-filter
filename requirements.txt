@@ -2,3 +2,6 @@ onnxruntime-directml
 huggingface_hub
 numpy
 Pillow
+aesthetic-predictor-v2-5
+transformers
+mediapipe
