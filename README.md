@@ -30,15 +30,14 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 
 | 파일 | 설명 |
 |------|------|
-| `AssetFilter-v1.0.1-cpu.zip` | 임베디드 Python + CPU torch 포함 (설치 불필요) |
-| `AssetFilter-v1.0.1-cuda-split.*` | 임베디드 Python + CUDA torch 포함 (분할 압축) |
+| `AssetFilter-v1.0.1-cuda-split.*` | 임베디드 Python + CUDA torch 포함 (분할 압축, GPU 없으면 CPU 자동 전환) |
 
-1. ZIP 압축 해제
+1. `.z01` + `.zip` 두 파일을 모두 다운로드한 뒤 같은 폴더에 놓고 `.zip`을 해제
 2. `run.bat` 또는 `AssetFilter.exe` 실행
 3. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~3.5GB)
 
-> **AssetFilter.exe** — CPU 전용 독립 실행 파일. Python 환경 없이 단독 실행 가능.
-> **run.bat** — 임베디드 Python 환경으로 실행. CUDA ZIP을 사용하면 GPU 가속됩니다.
+> **AssetFilter.exe** — CPU 전용 독립 실행 파일. torch 미포함으로 Aesthetic Score 옵션 비활성화. Camie Tagger + DirectML만 동작.
+> **run.bat** — 임베디드 Python 환경으로 실행. NVIDIA GPU가 있으면 CUDA 가속, 없으면 CPU로 자동 전환.
 
 ### 소스에서 실행 (개발용)
 
@@ -100,7 +99,7 @@ gabriel.angry.30.png
 | `huggingface_hub` | 모델 자동 다운로드 |
 | `Pillow` | 이미지 로드 및 전처리 |
 | `numpy` | 배열 연산 |
-| `torch` (CPU) | Aesthetic Predictor V2.5 추론 |
+| `torch` (CUDA) | Aesthetic Predictor V2.5 추론 (CUDA/CPU 자동 전환) |
 | `aesthetic-predictor-v2-5` | SigLIP 기반 미학 점수 모델 |
 | `transformers` | SigLIP 모델 로딩 |
 | `mediapipe` | 얼굴 인식 |
