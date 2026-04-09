@@ -175,6 +175,12 @@ class App:
             row=row, column=0, columnspan=3, sticky="ew", pady=8
         )
 
+        # --- Phase label ---
+        row += 1
+        self.phase_var = tk.StringVar(value="")
+        self.phase_label = ttk.Label(frame, textvariable=self.phase_var, font=("Segoe UI", 9, "bold"))
+        self.phase_label.grid(row=row, column=0, columnspan=3, sticky="w", **pad)
+
         # --- Progress ---
         row += 1
         self.progress_var = tk.DoubleVar(value=0)
@@ -413,7 +419,9 @@ class App:
 
         self._set_running(True)
         self.progress_var.set(0)
+        self.phase_var.set("")
         self.emo_status_var.set("")
+        self.progress_bar.configure(mode="determinate")
         self._stop_event.clear()
         self._pause_event.set()
 
@@ -458,6 +466,11 @@ class App:
         )
         thread.start()
 
+    # Phase progress weight constants (must sum to 100)
+    _PHASE_W_PREPARE = 10   # model download + loading
+    _PHASE_W_ANALYZE = 85   # batch scoring loop
+    _PHASE_W_FINALIZE = 5   # quality floor + ranking + copy
+
     def _worker(self, emotion_groups, top_n, output_dir, scoring_config):
         try:
             from PIL import Image
@@ -471,13 +484,18 @@ class App:
             aesthetic_weight = scoring_config["aesthetic_weight"]
             face_weight = scoring_config["face_weight"]
 
-            # --- Phase 0: EXIF tags ---
+            # ======== Phase 1/3: Model Preparation ========
+            self.queue.put(("phase", "Step 1/3 — Preparing models"))
+            self.queue.put(("progress", 0))
+
             self.queue.put(("status", "Reading EXIF tags from images..."))
             exif_tags = extract_exif_tags_by_emotion(emotion_groups)
             found = sum(1 for v in exif_tags.values() if v)
             self.queue.put(("status", f"EXIF tags found for {found}/{len(exif_tags)} emotions. Loading models..."))
 
-            # --- Load all models upfront ---
+            # Switch to indeterminate during model download
+            self.queue.put(("progress_mode", "indeterminate"))
+
             def download_cb(msg_type, msg_data):
                 self.queue.put((msg_type, msg_data))
 
@@ -505,25 +523,29 @@ class App:
                     logger.warning("Face scoring unavailable: %s", e)
                     self.queue.put(("status", f"Face scoring unavailable: {e}"))
 
-            # Collect all image paths
+            # Back to determinate, mark phase 1 done
+            self.queue.put(("progress_mode", "determinate"))
+            self.queue.put(("progress", self._PHASE_W_PREPARE))
+
+            # ======== Phase 2/3: Image Analysis ========
+            self.queue.put(("phase", "Step 2/3 — Analyzing images"))
+
             all_paths = [path for items in emotion_groups.values() for path, _ in items]
             total = len(all_paths)
-
-            # --- Unified scoring loop: load each image ONCE for all scorers ---
-            self.queue.put(("progress", 0))
-            self.queue.put(("status", "Analyzing images..."))
 
             aesthetic_scores: dict = {}
             face_scores: dict = {}
             camie_batch_size = 16
             aes_batch_size = 16
 
-            # In hard_filter mode, run face BEFORE aesthetic to skip rejected images
             face_first = (
                 face_scorer_inst is not None
                 and face_mode == "hard_filter"
                 and aes_scorer is not None
             )
+
+            phase2_base = self._PHASE_W_PREPARE
+            phase2_span = self._PHASE_W_ANALYZE
 
             for i in range(0, total, camie_batch_size):
                 if self._stop_event.is_set():
@@ -533,7 +555,6 @@ class App:
 
                 chunk_paths = all_paths[i : i + camie_batch_size]
 
-                # Load images once for this chunk
                 pil_images: dict[Path, Image.Image] = {}
                 for p in chunk_paths:
                     try:
@@ -541,17 +562,14 @@ class App:
                     except Exception as e:
                         logger.warning("Failed to load %s: %s", p, e)
 
-                # 1) Camie Tagger inference
                 batch_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
                 scorer.infer_batch_pil(batch_items)
 
-                # 2) Face scoring first (when hard_filter — saves aesthetic work)
                 if face_scorer_inst is not None and face_first:
                     face_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
                     if face_items:
                         face_scores.update(face_scorer_inst.score_batch_pil(face_items))
 
-                # 3) Aesthetic scoring (skip face-rejected images in hard_filter)
                 if aes_scorer is not None:
                     aes_candidates = list(chunk_paths)
                     if face_first:
@@ -566,27 +584,28 @@ class App:
                             batch_result = aes_scorer.score_batch_pil(sub_items)
                             aesthetic_scores.update(batch_result)
 
-                # 4) Face scoring (when NOT hard_filter — weighted or face-only)
                 if face_scorer_inst is not None and not face_first:
                     face_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
                     if face_items:
                         face_scores.update(face_scorer_inst.score_batch_pil(face_items))
 
-                # Free loaded images
                 for img in pil_images.values():
                     img.close()
                 del pil_images
 
-                # Progress
                 processed = min(i + camie_batch_size, total)
-                pct = processed / total * 100
+                pct = phase2_base + (processed / total) * phase2_span
                 self.queue.put(("progress", pct))
                 self.queue.put(("status", f"Analyzing images... {processed}/{total}"))
 
             if face_scorer_inst is not None:
                 face_scorer_inst.close()
 
-            # --- Global Aesthetic Floor ---
+            # ======== Phase 3/3: Ranking & Export ========
+            self.queue.put(("phase", "Step 3/3 — Ranking & exporting"))
+            self.queue.put(("progress", phase2_base + phase2_span))
+
+            # Global Aesthetic Floor
             min_aes = scoring_config.get("min_aesthetic_quality", 0.0)
             if aes_scorer is not None and min_aes > 1.0:
                 before_count = sum(len(v) for v in emotion_groups.values())
@@ -598,12 +617,10 @@ class App:
                 after_count = sum(len(v) for v in emotion_groups.values())
                 removed = before_count - after_count
                 if removed > 0:
-                    self.queue.put(("status", f"Aesthetic floor: {removed} images below {min_aes:.1f} removed."))
+                    self.queue.put(("status", f"Quality floor: {removed} images below {min_aes:.1f} removed."))
 
-            # --- Camie emotion scoring (from accumulated probabilities) ---
             scored = scorer.compute_emotion_scores(emotion_groups, exif_tags)
 
-            # --- Combine Scores ---
             score_meta = {}
             if aes_scorer is not None or face_scorer_inst is not None:
                 actual_face_mode = face_mode if face_scorer_inst is not None else "off"
@@ -618,7 +635,6 @@ class App:
                     face_weight=face_weight,
                 )
 
-            # --- Copy and Report ---
             self.queue.put(("status", "Copying files..."))
             output_dir.mkdir(parents=True, exist_ok=True)
             total_copied = filter_and_copy(scored, top_n, output_dir)
@@ -651,21 +667,38 @@ class App:
                 msg_type, msg_data = self.queue.get_nowait()
                 if msg_type == "progress":
                     self.progress_var.set(msg_data)
+                elif msg_type == "phase":
+                    self.phase_var.set(msg_data)
+                elif msg_type == "progress_mode":
+                    self.progress_bar.configure(mode=msg_data)
+                    if msg_data == "indeterminate":
+                        self.progress_bar.start(15)
+                    else:
+                        self.progress_bar.stop()
                 elif msg_type == "status":
                     self.status_var.set(msg_data)
                 elif msg_type == "emo_status":
                     self.emo_status_var.set(msg_data)
                 elif msg_type == "done":
                     self._set_running(False)
+                    self.progress_bar.stop()
+                    self.progress_bar.configure(mode="determinate")
+                    self.phase_var.set("Complete")
                     self.status_var.set(msg_data)
                     self.emo_status_var.set("")
                     messagebox.showinfo("Complete", msg_data)
                 elif msg_type == "cancelled":
                     self._set_running(False)
+                    self.progress_bar.stop()
+                    self.progress_bar.configure(mode="determinate")
+                    self.phase_var.set("Stopped")
                     self.status_var.set(msg_data)
                     self.emo_status_var.set("")
                 elif msg_type == "error":
                     self._set_running(False)
+                    self.progress_bar.stop()
+                    self.progress_bar.configure(mode="determinate")
+                    self.phase_var.set("Error")
                     self.status_var.set(f"Error: {msg_data}")
                     self.status_label.configure(foreground="red")
         except queue.Empty:
