@@ -32,6 +32,8 @@ def generate_report(
             em_meta = score_meta[emotion]
             if "filtered_by_face" in em_meta:
                 emotion_data["filtered_by_face"] = em_meta["filtered_by_face"]
+            if "fallback_auxiliary_only" in em_meta:
+                emotion_data["fallback_auxiliary_only"] = em_meta["fallback_auxiliary_only"]
 
         scores_list = []
         for item in items:
@@ -42,6 +44,10 @@ def generate_report(
                 entry["aesthetic_score"] = round(item["aesthetic_score"], 2)
             if "face_score" in item:
                 entry["face_score"] = round(item["face_score"], 4)
+            if "consistency_score" in item:
+                entry["consistency_score"] = round(item["consistency_score"], 4)
+            if "consistency_raw_score" in item:
+                entry["consistency_raw_score"] = round(item["consistency_raw_score"], 4)
             if "neg_score" in item and item["neg_score"] > 0:
                 entry["neg_score"] = round(item["neg_score"], 4)
             if "combined_score" in item:
