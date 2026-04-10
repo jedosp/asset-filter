@@ -22,6 +22,7 @@ python -m PyInstaller ^
     --add-data "src\wd_scorer.py;." ^
     --add-data "src\aesthetic_scorer.py;." ^
     --add-data "src\face_scorer.py;." ^
+    --add-data "src\consistency_scorer.py;." ^
     --hidden-import onnxruntime ^
     --hidden-import huggingface_hub ^
     --hidden-import PIL ^

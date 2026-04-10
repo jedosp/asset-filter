@@ -33,6 +33,58 @@ NEGATIVE_TAGS = [
     "extra_digit", "fewer_digits",
 ]
 
+# Appearance tags for tag deviation filter — exact matches
+_APPEARANCE_TAGS = frozenset([
+    # Eyewear
+    "glasses", "sunglasses", "goggles", "eyepatch", "monocle",
+    "semi-rimless_eyewear", "rimless_eyewear", "round_eyewear",
+    # Head accessories
+    "hat", "beret", "hood", "helmet", "crown", "tiara",
+    "headband", "hairband", "headphones", "earphones",
+    "hair_ornament", "hairclip", "hair_ribbon", "hair_bow",
+    "hair_flower", "hair_tie", "scrunchie", "hairpin", "multiple_hairpins",
+    # Body accessories
+    "earrings", "necklace", "choker", "pendant",
+    "bracelet", "gloves", "scarf", "necktie", "bowtie", "piercing",
+    # Hair style
+    "bob_cut", "ponytail", "side_ponytail", "twintails", "twin_braids",
+    "braid", "single_braid", "french_braid",
+    "hair_bun", "double_bun", "low_twintails", "high_ponytail",
+    "low_ponytail", "drill_hair", "ringlets", "hime_cut",
+    "pixie_cut", "afro", "mohawk", "undercut",
+    "short_hair", "long_hair", "medium_hair", "very_long_hair",
+    "absurdly_long_hair", "hair_over_one_eye", "hair_over_eyes",
+    "sidelocks", "ahoge", "blunt_bangs", "swept_bangs",
+    "parted_bangs", "hair_between_eyes",
+    "messy_hair", "wavy_hair", "curly_hair", "straight_hair",
+    "hair_up", "hair_down", "tied_hair",
+    # Hair color
+    "black_hair", "brown_hair", "blonde_hair", "red_hair",
+    "blue_hair", "green_hair", "pink_hair", "purple_hair",
+    "white_hair", "grey_hair", "silver_hair", "orange_hair",
+    "aqua_hair", "multicolored_hair", "gradient_hair",
+    "streaked_hair", "two-tone_hair", "colored_inner_hair",
+    # Eye anomalies
+    "heterochromia",
+    # Non-human features
+    "horns", "wings", "tail", "halo",
+    "animal_ears", "cat_ears", "dog_ears", "fox_ears", "rabbit_ears",
+    "fang", "fangs", "elf_ears", "pointy_ears",
+])
+
+# Suffix patterns — any general tag ending with these is appearance-related
+_APPEARANCE_TAG_SUFFIXES = (
+    "_hair_ornament", "_earrings", "_hairband", "_choker",
+    "_necklace", "_glasses", "_eyewear", "_hairclip",
+)
+
+
+def _is_appearance_tag(tag: str) -> bool:
+    """Check if a tag is appearance-related (accessories, hair, eyes, etc.)."""
+    if tag in _APPEARANCE_TAGS:
+        return True
+    return any(tag.endswith(s) for s in _APPEARANCE_TAG_SUFFIXES)
+
 
 class CamieTaggerScorer:
     def __init__(self, download_callback=None):
@@ -233,6 +285,96 @@ class CamieTaggerScorer:
 
         return results
 
+    def compute_reference_tag_profile(
+        self,
+        reference_paths: list[Path],
+    ) -> np.ndarray:
+        """Compute mean tag probabilities across reference images.
+
+        Returns a 1-D array of shape (n_tags,) with the average probability
+        for every tag in the vocabulary.  Only ``general`` category tags are
+        used later for deviation checks, but we store the full vector so the
+        caller can slice as needed.
+        """
+        ref_probs_list: list[np.ndarray] = []
+        for path in reference_paths:
+            probs = self.image_probs.get(path)
+            if probs is not None:
+                ref_probs_list.append(probs)
+            else:
+                logger.warning("Reference image %s has no tag probs (not inferred yet).", path)
+        if not ref_probs_list:
+            raise ValueError("No reference images have been inferred by Camie Tagger.")
+        profile = np.mean(ref_probs_list, axis=0).astype(np.float32)
+        logger.info(
+            "Reference tag profile computed from %d image(s).",
+            len(ref_probs_list),
+        )
+        return profile
+
+    def get_tag_deviation_excluded_paths(
+        self,
+        reference_profile: np.ndarray,
+        emotion_groups: dict[str, list[tuple[Path, int]]],
+        candidate_threshold: float = 0.7,
+        deviation_threshold: float = 0.3,
+    ) -> tuple[set[Path], dict[Path, list[tuple[str, float, float]]]]:
+        """Exclude images where an appearance tag is prominently present but absent in references.
+
+        Only appearance-related ``general`` category tags are checked
+        (accessories, hair, eyes, non-human features).  Expression effects
+        (squiggle, sweatdrop) and meta tags (virtual_youtuber) are ignored.
+
+        A tag triggers exclusion when **both** conditions are met:
+        1. candidate probability >= *candidate_threshold* (visually prominent)
+        2. (candidate prob - reference avg) >= *deviation_threshold* (not in reference)
+
+        Returns (excluded_paths, details) where *details* maps each excluded
+        path to a list of (tag, candidate_prob, deviation) tuples.
+        """
+        # Build index mask for appearance-related general tags only
+        appearance_mask = np.zeros(len(self.tag_names), dtype=bool)
+        for tag, idx in self.tag_to_index.items():
+            if self.tag_to_category.get(tag) == "general" and _is_appearance_tag(tag):
+                appearance_mask[idx] = True
+
+        excluded: set[Path] = set()
+        details: dict[Path, list[tuple[str, float, float]]] = {}
+
+        for _emotion, items in emotion_groups.items():
+            for path, _ in items:
+                probs = self.image_probs.get(path)
+                if probs is None:
+                    continue
+
+                deviations = probs - reference_profile
+                # Conditions: appearance tag, high prob, high positive deviation
+                hits = np.where(
+                    appearance_mask
+                    & (probs >= candidate_threshold)
+                    & (deviations >= deviation_threshold)
+                )[0]
+
+                if hits.size > 0:
+                    tag_details = [
+                        (self.tag_names[idx], float(probs[idx]), float(deviations[idx]))
+                        for idx in hits
+                    ]
+                    excluded.add(path)
+                    details[path] = tag_details
+                    logger.info(
+                        "Tag deviation excluding %s: %s",
+                        path.name,
+                        ", ".join(f"{t}={p:.3f}(+{d:.3f})" for t, p, d in tag_details),
+                    )
+
+        logger.info(
+            "Tag deviation filter: %d images excluded out of %d total.",
+            len(excluded),
+            sum(len(items) for items in emotion_groups.values()),
+        )
+        return excluded, details
+
     def get_excluded_paths(
         self,
         exclude_tags: list[str],
@@ -285,14 +427,20 @@ def compute_combined_scores(
     emotion_scores: dict[str, list[dict[str, Any]]],
     aesthetic_scores: dict[Path, float] | None = None,
     face_scores: dict[Path, float] | None = None,
+    consistency_scores: dict[Path, float] | None = None,
+    consistency_raw_scores: dict[Path, float] | None = None,
     emotion_weight: float = 0.65,
     aesthetic_weight: float = 0.35,
     face_mode: str = "off",
     face_threshold: float = 0.3,
     face_weight: float = 0.15,
+    consistency_mode: str = "weighted",
+    consistency_weight: float = 0.20,
+    consistency_gate_threshold: float = 0.35,
+    consistency_penalty_power: float = 3.0,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
     """
-    Combine emotion, aesthetic, and face scores into a unified ranking.
+    Combine emotion, aesthetic, face, and consistency scores into a unified ranking.
 
     Returns (scored_results, meta) where meta has per-emotion metadata
     such as filtered_by_face count.
@@ -302,20 +450,32 @@ def compute_combined_scores(
 
     for emotion, items in emotion_scores.items():
         new_items = []
+        hard_filtered_items = []  # items rejected by hard filter, kept for fallback
         filtered_count = 0
+        consistency_filtered_count = 0
 
         # Detect if emotion scoring is effectively dead (all zeros)
         all_emotion_zero = all(item["score"] == 0.0 for item in items)
-        if all_emotion_zero and aesthetic_scores is not None:
-            # Fallback: use aesthetic 100% when Camie can't score this emotion
+        has_aesthetic = aesthetic_scores is not None
+        has_face = face_mode == "weighted" and face_scores is not None
+        has_consistency = consistency_mode in ("weighted", "hard_filter") and consistency_scores is not None
+
+        if all_emotion_zero and (has_aesthetic or has_face or has_consistency):
             eff_emotion_w = 0.0
-            eff_aesthetic_w = 1.0
-            eff_face_w = 0.0
-            logger.info("Emotion '%s': no Camie tag match, falling back to aesthetic-only ranking", emotion)
+            eff_aesthetic_w = aesthetic_weight if has_aesthetic else 0.0
+            eff_face_w = face_weight if has_face else 0.0
+            eff_consistency_w = consistency_weight if has_consistency else 0.0
+            aux_total = eff_aesthetic_w + eff_face_w + eff_consistency_w
+            if aux_total > 0:
+                eff_aesthetic_w /= aux_total
+                eff_face_w /= aux_total
+                eff_consistency_w /= aux_total
+            logger.info("Emotion '%s': no Camie tag match, falling back to auxiliary ranking", emotion)
         else:
             eff_emotion_w = emotion_weight
             eff_aesthetic_w = aesthetic_weight
             eff_face_w = face_weight
+            eff_consistency_w = consistency_weight
 
         for item in items:
             path = item["path"]
@@ -340,25 +500,36 @@ def compute_combined_scores(
                 f_score = face_scores.get(path, 0.3)
                 new_item["face_score"] = f_score
 
+            c_score = None
+            if consistency_scores is not None:
+                c_score = consistency_scores.get(path, 0.0)
+                new_item["consistency_score"] = c_score
+                if consistency_raw_scores is not None:
+                    new_item["consistency_raw_score"] = consistency_raw_scores.get(path, c_score)
+
             # Hard filter: discard images below threshold
+            hard_rejected = False
             if face_mode == "hard_filter" and f_score is not None:
                 if f_score < face_threshold:
                     filtered_count += 1
-                    continue
+                    hard_rejected = True
+            if not hard_rejected and consistency_mode == "hard_filter" and c_score is not None:
+                if c_score < consistency_gate_threshold:
+                    consistency_filtered_count += 1
+                    hard_rejected = True
 
             # Compute combined score
-            if aes_norm is not None and face_mode == "weighted" and f_score is not None:
-                combined = (
-                    em_score * eff_emotion_w
-                    + aes_norm * eff_aesthetic_w
-                    + f_score * eff_face_w
-                )
-            elif aes_norm is not None:
-                combined = em_score * eff_emotion_w + aes_norm * eff_aesthetic_w
-            elif face_mode == "weighted" and f_score is not None:
-                combined = em_score * eff_emotion_w + f_score * eff_face_w
-            else:
-                combined = em_score
+            combined = em_score * eff_emotion_w
+            if aes_norm is not None:
+                combined += aes_norm * eff_aesthetic_w
+            if face_mode == "weighted" and f_score is not None:
+                combined += f_score * eff_face_w
+            if has_consistency and c_score is not None:
+                combined += c_score * eff_consistency_w
+                if consistency_mode == "weighted" and c_score < consistency_gate_threshold:
+                    consistency_filtered_count += 1
+                    penalty_ratio = max(0.0, c_score / consistency_gate_threshold)
+                    combined *= penalty_ratio ** consistency_penalty_power
 
             # Apply negative tag penalty at combined level
             neg = item.get("neg_score", 0.0)
@@ -367,7 +538,23 @@ def compute_combined_scores(
 
             new_item["combined_score"] = combined
             new_item["score"] = combined
-            new_items.append(new_item)
+
+            if hard_rejected:
+                hard_filtered_items.append(new_item)
+            else:
+                new_items.append(new_item)
+
+        # Fallback: if hard filter removed ALL candidates, pick the best rejected one
+        if not new_items and hard_filtered_items:
+            hard_filtered_items.sort(key=lambda x: x["score"], reverse=True)
+            best = hard_filtered_items[0]
+            best["hard_filter_fallback"] = True
+            new_items.append(best)
+            logger.info(
+                "Emotion '%s': hard filter removed all %d candidates, "
+                "keeping best fallback (score=%.4f)",
+                emotion, len(hard_filtered_items), best["score"],
+            )
 
         new_items.sort(key=lambda x: x["score"], reverse=True)
         results[emotion] = new_items
@@ -375,8 +562,14 @@ def compute_combined_scores(
         emotion_meta: dict[str, Any] = {}
         if filtered_count > 0:
             emotion_meta["filtered_by_face"] = filtered_count
-        if all_emotion_zero and aesthetic_scores is not None:
-            emotion_meta["fallback_aesthetic_only"] = True
+        if consistency_filtered_count > 0 and consistency_mode == "weighted":
+            emotion_meta["penalized_by_consistency_gate"] = consistency_filtered_count
+        if consistency_filtered_count > 0 and consistency_mode == "hard_filter":
+            emotion_meta["filtered_by_consistency"] = consistency_filtered_count
+        if all_emotion_zero and (has_aesthetic or has_face or has_consistency):
+            emotion_meta["fallback_auxiliary_only"] = True
+        if not new_items or (len(new_items) == 1 and new_items[0].get("hard_filter_fallback")):
+            emotion_meta["hard_filter_fallback_used"] = True
         meta[emotion] = emotion_meta
 
     return results, meta

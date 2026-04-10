@@ -10,6 +10,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
+from PIL import Image, ImageTk
+
 from filename_parser import parse_filename, scan_folder, extract_exif_tags_by_emotion
 from filter import filter_and_copy
 from report import generate_report
@@ -27,6 +29,20 @@ class App:
         self.emotion_groups: dict | None = None
         self.output_dir: Path | None = None
         self.running = False
+        self.reference_paths: list[Path] = []
+        self.reference_thumbnails: list[ImageTk.PhotoImage] = []
+        self.consistency_model_available = False
+        self.consistency_cache_dir: Path | None = None
+
+        try:
+            from consistency_scorer import ConsistencyScorer
+
+            self.consistency_cache_dir = ConsistencyScorer.get_expected_cache_dir(
+                cache_dir=os.environ.get("HF_HOME")
+            )
+            self.consistency_model_available = ConsistencyScorer.is_runtime_available()
+        except Exception as exc:
+            logger.warning("Failed to probe consistency model availability: %s", exc)
 
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
@@ -62,6 +78,109 @@ class App:
         self.topn_var = tk.IntVar(value=10)
         self.topn_spin = ttk.Spinbox(frame, from_=1, to=30, textvariable=self.topn_var, width=6)
         self.topn_spin.grid(row=row, column=1, sticky="w", **pad)
+
+        # --- Reference Consistency ---
+        row += 1
+        ref_frame = ttk.LabelFrame(frame, text="Reference Consistency", padding=8)
+        ref_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=10, pady=8)
+        ref_frame.columnconfigure(2, weight=1)
+
+        rrow = 0
+        self.consistency_var = tk.BooleanVar(value=False)
+        self.consistency_check = ttk.Checkbutton(
+            ref_frame,
+            text="Enable Reference Consistency",
+            variable=self.consistency_var,
+            command=self._update_scoring_ui,
+        )
+        self.consistency_check.grid(row=rrow, column=0, columnspan=3, sticky="w", pady=2)
+
+        rrow += 1
+        self.reference_add_btn = ttk.Button(
+            ref_frame,
+            text="Add Images...",
+            command=self._add_reference_images,
+        )
+        self.reference_add_btn.grid(row=rrow, column=0, sticky="w", pady=2)
+        self.reference_clear_btn = ttk.Button(
+            ref_frame,
+            text="Clear",
+            command=self._clear_reference_images,
+        )
+        self.reference_clear_btn.grid(row=rrow, column=1, sticky="w", padx=(8, 0), pady=2)
+
+        rrow += 1
+        self.reference_status_var = tk.StringVar(value="No reference images selected.")
+        self.reference_status_label = ttk.Label(ref_frame, textvariable=self.reference_status_var)
+        self.reference_status_label.grid(row=rrow, column=0, columnspan=3, sticky="w", pady=2)
+
+        rrow += 1
+        self.reference_hint = ttk.Label(
+            ref_frame,
+            text="Select 1-5 images of the correct design. Tip: run once, then reuse your best outputs as references.",
+            foreground="gray",
+            font=("Segoe UI", 8),
+        )
+        self.reference_hint.grid(row=rrow, column=0, columnspan=3, sticky="w", pady=(0, 2))
+
+        rrow += 1
+        if self.consistency_model_available:
+            model_text = (
+                "DINOv2 will be downloaded automatically on first use and cached in "
+                f"{self.consistency_cache_dir}"
+            )
+            model_color = "gray"
+        else:
+            model_text = (
+                "Runtime not available. Reference consistency is disabled because torch or transformers "
+                "could not be imported."
+            )
+            model_color = "darkred"
+        self.consistency_model_var = tk.StringVar(value=model_text)
+        self.consistency_model_label = ttk.Label(
+            ref_frame,
+            textvariable=self.consistency_model_var,
+            foreground=model_color,
+            font=("Segoe UI", 8),
+            wraplength=420,
+            justify="left",
+        )
+        self.consistency_model_label.grid(row=rrow, column=0, columnspan=3, sticky="w", pady=(0, 2))
+
+        rrow += 1
+        self.reference_preview_frame = ttk.Frame(ref_frame)
+        self.reference_preview_frame.grid(row=rrow, column=0, columnspan=3, sticky="ew", pady=4)
+
+        rrow += 1
+        self.consistency_mode_label = ttk.Label(ref_frame, text="Mode:")
+        self.consistency_mode_label.grid(row=rrow, column=0, sticky="w", pady=2)
+        self.consistency_mode_var = tk.StringVar(value="Hard Filter")
+        self.consistency_mode_combo = ttk.Combobox(
+            ref_frame,
+            textvariable=self.consistency_mode_var,
+            values=["Weighted", "Hard Filter"],
+            state="readonly",
+            width=12,
+        )
+        self.consistency_mode_combo.grid(row=rrow, column=1, sticky="w", pady=2)
+        self.consistency_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._update_scoring_ui())
+
+        rrow += 1
+        self.consistency_threshold_label = ttk.Label(ref_frame, text="Threshold:")
+        self.consistency_threshold_label.grid(row=rrow, column=0, sticky="w", pady=2)
+        self.consistency_threshold_var = tk.DoubleVar(value=0.60)
+        self.consistency_threshold_spin = ttk.Spinbox(
+            ref_frame,
+            from_=-1.0,
+            to=1.0,
+            increment=0.05,
+            textvariable=self.consistency_threshold_var,
+            width=6,
+        )
+        self.consistency_threshold_spin.grid(row=rrow, column=1, sticky="w", pady=2)
+
+        if not self.consistency_model_available:
+            self.consistency_var.set(False)
 
         # --- Scoring Options ---
         row += 1
@@ -183,6 +302,19 @@ class App:
         self.face_weight_spin.bind("<Return>", lambda e: self._couple_weights("face"))
         self.face_weight_spin.bind("<FocusOut>", lambda e: self._couple_weights("face"))
 
+        srow += 1
+        self.consistency_weight_var = tk.DoubleVar(value=0.20)
+        self.consistency_weight_label = ttk.Label(scoring_frame, text="Consistency:")
+        self.consistency_weight_label.grid(row=srow, column=0, sticky="w", padx=(20, 5), pady=2)
+        self.consistency_weight_spin = ttk.Spinbox(
+            scoring_frame, from_=0.0, to=1.0, increment=0.05,
+            textvariable=self.consistency_weight_var, width=6,
+            command=lambda: self._couple_weights("consistency"),
+        )
+        self.consistency_weight_spin.grid(row=srow, column=1, sticky="w", pady=2)
+        self.consistency_weight_spin.bind("<Return>", lambda e: self._couple_weights("consistency"))
+        self.consistency_weight_spin.bind("<FocusOut>", lambda e: self._couple_weights("consistency"))
+
         self._update_scoring_ui()
 
         # --- Separator ---
@@ -249,6 +381,12 @@ class App:
         self.emotion_weight_spin.state(state)
         self.aesthetic_weight_spin.state(state)
         self.face_weight_spin.state(state)
+        self.consistency_check.state(state)
+        self.reference_add_btn.state(state)
+        self.reference_clear_btn.state(state)
+        self.consistency_mode_combo.state(["disabled"] if running else ["readonly"])
+        self.consistency_threshold_spin.state(state)
+        self.consistency_weight_spin.state(state)
         if running:
             self.pause_btn.state(["!disabled"])
             self.stop_btn.state(["!disabled"])
@@ -265,6 +403,11 @@ class App:
         face_on = self.face_var.get()
         face_mode = self.face_mode_var.get()
         face_weighted = face_on and face_mode == "Weighted"
+        consistency_toggle_available = self.consistency_model_available
+        consistency_ready = consistency_toggle_available and self.consistency_var.get() and bool(self.reference_paths)
+        consistency_mode = self.consistency_mode_var.get()
+        consistency_weighted = consistency_ready and consistency_mode == "Weighted"
+        consistency_hard_filter = consistency_ready and consistency_mode == "Hard Filter"
 
         # Min aesthetic quality
         for w in (self.min_aes_label, self.min_aes_spin, self.min_aes_hint):
@@ -288,7 +431,8 @@ class App:
                 w.grid_remove()
 
         # Weight section
-        need_weights = aes_on or face_weighted
+        active_keys = self._get_active_weight_keys()
+        need_weights = len(active_keys) > 1
         for w in (self.weight_sep, self.weight_section_label):
             if need_weights:
                 w.grid()
@@ -315,24 +459,37 @@ class App:
             else:
                 w.grid_remove()
 
+        for w in (self.consistency_mode_label, self.consistency_mode_combo):
+            if consistency_ready:
+                w.grid()
+            else:
+                w.grid_remove()
+
+        for w in (self.consistency_threshold_label, self.consistency_threshold_spin):
+            if consistency_hard_filter:
+                w.grid()
+            else:
+                w.grid_remove()
+
+        show_consistency_weight = consistency_weighted or consistency_hard_filter
+        for w in (self.consistency_weight_label, self.consistency_weight_spin):
+            if show_consistency_weight:
+                w.grid()
+            else:
+                w.grid_remove()
+
+        if consistency_toggle_available:
+            self.consistency_check.state(["!disabled"])
+        else:
+            self.consistency_check.state(["disabled"])
+
+        consistency_controls_state = ["!disabled"] if consistency_ready or (self.consistency_var.get() and consistency_toggle_available) else ["disabled"]
+        self.reference_add_btn.state(consistency_controls_state)
+        self.reference_clear_btn.state(consistency_controls_state)
+
         # Set default weights
         self._updating_weights = True
-        if aes_on and face_weighted:
-            self.emotion_weight_var.set(0.55)
-            self.aesthetic_weight_var.set(0.30)
-            self.face_weight_var.set(0.15)
-        elif aes_on:
-            self.emotion_weight_var.set(0.65)
-            self.aesthetic_weight_var.set(0.35)
-            self.face_weight_var.set(0.0)
-        elif face_weighted:
-            self.emotion_weight_var.set(0.80)
-            self.aesthetic_weight_var.set(0.0)
-            self.face_weight_var.set(0.20)
-        else:
-            self.emotion_weight_var.set(1.0)
-            self.aesthetic_weight_var.set(0.0)
-            self.face_weight_var.set(0.0)
+        self._set_default_weights(active_keys)
         self._updating_weights = False
 
     def _couple_weights(self, changed: str):
@@ -341,67 +498,162 @@ class App:
             return
         self._updating_weights = True
         try:
-            aes_on = self.aesthetic_var.get()
-            face_weighted = self.face_var.get() and self.face_mode_var.get() == "Weighted"
+            active_keys = self._get_active_weight_keys()
+            if len(active_keys) <= 1:
+                self._set_default_weights(active_keys)
+                return
 
-            em = max(0.0, min(1.0, self.emotion_weight_var.get()))
-            ae = max(0.0, min(1.0, self.aesthetic_weight_var.get()))
-            fa = max(0.0, min(1.0, self.face_weight_var.get()))
+            if changed not in active_keys:
+                changed = "emotion"
 
-            if aes_on and face_weighted:
-                # 3-weight coupling
-                if changed == "emotion":
-                    remainder = 1.0 - em
-                    old_sum = ae + fa
-                    if old_sum > 0:
-                        ae = remainder * (ae / old_sum)
-                        fa = remainder * (fa / old_sum)
-                    else:
-                        ae = remainder * 0.67
-                        fa = remainder * 0.33
-                elif changed == "aesthetic":
-                    remainder = 1.0 - ae
-                    old_sum = em + fa
-                    if old_sum > 0:
-                        em = remainder * (em / old_sum)
-                        fa = remainder * (fa / old_sum)
-                    else:
-                        em = remainder * 0.8
-                        fa = remainder * 0.2
-                else:
-                    remainder = 1.0 - fa
-                    old_sum = em + ae
-                    if old_sum > 0:
-                        em = remainder * (em / old_sum)
-                        ae = remainder * (ae / old_sum)
-                    else:
-                        em = remainder * 0.65
-                        ae = remainder * 0.35
-                self.emotion_weight_var.set(round(em, 2))
-                self.aesthetic_weight_var.set(round(ae, 2))
-                self.face_weight_var.set(round(fa, 2))
+            weights = self._get_current_weight_values()
+            changed_value = max(0.0, min(1.0, weights[changed]))
+            other_keys = [key for key in active_keys if key != changed]
+            remainder = max(0.0, 1.0 - changed_value)
+            old_sum = sum(weights[key] for key in other_keys)
 
-            elif aes_on:
-                # 2-weight: emotion + aesthetic
-                if changed == "emotion":
-                    self.emotion_weight_var.set(round(em, 2))
-                    self.aesthetic_weight_var.set(round(1.0 - em, 2))
-                else:
-                    self.aesthetic_weight_var.set(round(ae, 2))
-                    self.emotion_weight_var.set(round(1.0 - ae, 2))
+            if not other_keys:
+                normalized = {changed: 1.0}
+            elif old_sum > 0:
+                normalized = {changed: changed_value}
+                for key in other_keys:
+                    normalized[key] = remainder * (weights[key] / old_sum)
+            else:
+                defaults = self._default_weights_for_keys(active_keys)
+                default_sum = sum(defaults[key] for key in other_keys)
+                normalized = {changed: changed_value}
+                for key in other_keys:
+                    share = defaults[key] / default_sum if default_sum > 0 else 1.0 / len(other_keys)
+                    normalized[key] = remainder * share
 
-            elif face_weighted:
-                # 2-weight: emotion + face
-                if changed == "emotion":
-                    self.emotion_weight_var.set(round(em, 2))
-                    self.face_weight_var.set(round(1.0 - em, 2))
-                else:
-                    self.face_weight_var.set(round(fa, 2))
-                    self.emotion_weight_var.set(round(1.0 - fa, 2))
+            self._set_weight_values(normalized)
         except (tk.TclError, ValueError):
             pass
         finally:
             self._updating_weights = False
+
+    def _get_active_weight_keys(self) -> list[str]:
+        active = ["emotion"]
+        if self.aesthetic_var.get():
+            active.append("aesthetic")
+        if self.face_var.get() and self.face_mode_var.get() == "Weighted":
+            active.append("face")
+        if (
+            self.consistency_model_available
+            and self.consistency_var.get()
+            and self.reference_paths
+            and self.consistency_mode_var.get() in ("Weighted", "Hard Filter")
+        ):
+            active.append("consistency")
+        return active
+
+    def _default_weights_for_keys(self, keys: list[str]) -> dict[str, float]:
+        preset_map: dict[tuple[str, ...], dict[str, float]] = {
+            ("emotion",): {"emotion": 1.0},
+            ("emotion", "aesthetic"): {"emotion": 0.65, "aesthetic": 0.35},
+            ("emotion", "face"): {"emotion": 0.80, "face": 0.20},
+            ("emotion", "consistency"): {"emotion": 0.60, "consistency": 0.40},
+            ("emotion", "aesthetic", "face"): {"emotion": 0.55, "aesthetic": 0.30, "face": 0.15},
+            ("emotion", "aesthetic", "consistency"): {"emotion": 0.50, "aesthetic": 0.25, "consistency": 0.25},
+            ("emotion", "face", "consistency"): {"emotion": 0.60, "face": 0.15, "consistency": 0.25},
+            ("emotion", "aesthetic", "face", "consistency"): {
+                "emotion": 0.45,
+                "aesthetic": 0.25,
+                "face": 0.10,
+                "consistency": 0.20,
+            },
+        }
+        return preset_map.get(tuple(keys), {key: 1.0 / len(keys) for key in keys})
+
+    def _set_default_weights(self, active_keys: list[str]):
+        self._set_weight_values(self._default_weights_for_keys(active_keys))
+
+    def _get_current_weight_values(self) -> dict[str, float]:
+        return {
+            "emotion": max(0.0, min(1.0, self.emotion_weight_var.get())),
+            "aesthetic": max(0.0, min(1.0, self.aesthetic_weight_var.get())),
+            "face": max(0.0, min(1.0, self.face_weight_var.get())),
+            "consistency": max(0.0, min(1.0, self.consistency_weight_var.get())),
+        }
+
+    def _set_weight_values(self, weights: dict[str, float]):
+        self.emotion_weight_var.set(round(weights.get("emotion", 0.0), 2))
+        self.aesthetic_weight_var.set(round(weights.get("aesthetic", 0.0), 2))
+        self.face_weight_var.set(round(weights.get("face", 0.0), 2))
+        self.consistency_weight_var.set(round(weights.get("consistency", 0.0), 2))
+
+    def _refresh_reference_preview(self):
+        for child in self.reference_preview_frame.winfo_children():
+            child.destroy()
+
+        self.reference_thumbnails = []
+
+        if not self.reference_paths:
+            self.reference_status_var.set("No reference images selected.")
+            self._update_scoring_ui()
+            return
+
+        self.reference_status_var.set(f"{len(self.reference_paths)} reference image(s) selected.")
+
+        for index, path in enumerate(self.reference_paths):
+            thumb_frame = ttk.Frame(self.reference_preview_frame)
+            thumb_frame.grid(row=0, column=index, padx=4, pady=2, sticky="n")
+
+            try:
+                with Image.open(path) as img:
+                    preview = img.convert("RGB")
+                    preview.thumbnail((80, 80), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(preview)
+                    self.reference_thumbnails.append(photo)
+                    ttk.Label(thumb_frame, image=photo).grid(row=0, column=0, pady=(0, 2))
+            except Exception as exc:
+                logger.warning("Failed to build thumbnail for %s: %s", path, exc)
+                ttk.Label(thumb_frame, text="Preview\nunavailable", justify="center").grid(row=0, column=0, pady=(0, 2))
+
+            ttk.Label(thumb_frame, text=path.name, width=14, justify="center", wraplength=100).grid(
+                row=1, column=0, pady=(0, 2)
+            )
+            ttk.Button(
+                thumb_frame,
+                text="Remove",
+                command=lambda idx=index: self._remove_reference_image(idx),
+            ).grid(row=2, column=0)
+
+        self._update_scoring_ui()
+
+    def _add_reference_images(self):
+        selected = filedialog.askopenfilenames(
+            title="Select reference images",
+            filetypes=[
+                ("Image Files", "*.png *.jpg *.jpeg *.webp"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("WebP", "*.webp"),
+            ],
+        )
+        if not selected:
+            return
+
+        merged: list[Path] = list(self.reference_paths)
+        for selected_path in [Path(path) for path in selected]:
+            if selected_path not in merged:
+                merged.append(selected_path)
+
+        if len(merged) > 5:
+            messagebox.showwarning("Reference Images", "You can select up to 5 reference images.")
+            merged = merged[:5]
+
+        self.reference_paths = merged
+        self._refresh_reference_preview()
+
+    def _remove_reference_image(self, index: int):
+        if 0 <= index < len(self.reference_paths):
+            del self.reference_paths[index]
+            self._refresh_reference_preview()
+
+    def _clear_reference_images(self):
+        self.reference_paths = []
+        self._refresh_reference_preview()
 
     def _browse_folder(self):
         folder = filedialog.askdirectory(title="Select emotion image folder")
@@ -455,6 +707,14 @@ class App:
             if face_on
             else "off"
         )
+        consistency_mode_display = self.consistency_mode_var.get()
+        consistency_mode = (
+            {"Hard Filter": "hard_filter", "Weighted": "weighted"}.get(
+                consistency_mode_display, "weighted"
+            )
+            if self.consistency_model_available and self.consistency_var.get() and self.reference_paths
+            else "off"
+        )
 
         scoring_config = {
             "aesthetic_enabled": self.aesthetic_var.get(),
@@ -468,6 +728,16 @@ class App:
                 if face_on and face_mode == "weighted"
                 else 0.0
             ),
+            "consistency_enabled": self.consistency_model_available and self.consistency_var.get() and bool(self.reference_paths),
+            "consistency_weight": (
+                self.consistency_weight_var.get()
+                if consistency_mode in ("weighted", "hard_filter")
+                else 0.0
+            ),
+            "consistency_mode": consistency_mode,
+            "reference_paths": [Path(path) for path in self.reference_paths],
+            "consistency_gate_threshold": self.consistency_threshold_var.get(),
+            "consistency_penalty_power": 3.0,
             "min_aesthetic_quality": self.min_aes_var.get() if self.aesthetic_var.get() else 0.0,
             "exclude_tags": [t.strip() for t in self.exclude_tags_var.get().split(",") if t.strip()],
         }
@@ -500,6 +770,12 @@ class App:
             emotion_weight = scoring_config["emotion_weight"]
             aesthetic_weight = scoring_config["aesthetic_weight"]
             face_weight = scoring_config["face_weight"]
+            consistency_enabled = scoring_config["consistency_enabled"]
+            consistency_weight = scoring_config["consistency_weight"]
+            consistency_mode = scoring_config["consistency_mode"]
+            reference_paths = scoring_config["reference_paths"]
+            consistency_gate_threshold = scoring_config["consistency_gate_threshold"]
+            consistency_penalty_power = scoring_config["consistency_penalty_power"]
 
             # ======== Phase 1/3: Model Preparation ========
             self.queue.put(("phase", "Step 1/2 — Preparing models"))
@@ -541,6 +817,49 @@ class App:
                     logger.warning("Face scoring unavailable: %s", e)
                     self.queue.put(("status", f"Face scoring unavailable: {e}"))
 
+            consistency_scorer = None
+            reference_embedding = None
+            consistency_raw_scores: dict = {}
+            consistency_normalization_stats: dict | None = None
+            if consistency_enabled and reference_paths:
+                try:
+                    from consistency_scorer import ConsistencyScorer
+
+                    self.queue.put(("status", "Loading DINOv2 consistency model..."))
+                    consistency_scorer = ConsistencyScorer(cache_dir=os.environ.get("HF_HOME"))
+                    consistency_scorer.load_model(
+                        progress_callback=lambda msg: self.queue.put(("status", msg))
+                    )
+                    self.queue.put(("status", "Computing reference embedding..."))
+                    reference_embedding = consistency_scorer.compute_reference_embedding(reference_paths)
+                except Exception as e:
+                    logger.warning("Consistency scoring unavailable: %s", e)
+                    self.queue.put(("status", f"Consistency scoring unavailable: {e}"))
+                    consistency_scorer = None
+                    reference_embedding = None
+
+            # Infer reference images through Camie Tagger for tag deviation filter
+            reference_tag_profile = None
+            if consistency_enabled and reference_paths:
+                self.queue.put(("status", "Building reference tag profile..."))
+                ref_items = []
+                for rp in reference_paths:
+                    try:
+                        ref_img = Image.open(rp).convert("RGB")
+                        ref_items.append((rp, ref_img))
+                    except Exception as e:
+                        logger.warning("Failed to load reference image %s: %s", rp, e)
+                if ref_items:
+                    scorer.infer_batch_pil(ref_items)
+                    for _, img in ref_items:
+                        img.close()
+                    try:
+                        reference_tag_profile = scorer.compute_reference_tag_profile(
+                            [rp for rp, _ in ref_items]
+                        )
+                    except Exception as e:
+                        logger.warning("Reference tag profile failed: %s", e)
+
             # Back to determinate, mark phase 1 done
             self.queue.put(("progress_mode", "determinate"))
             self.queue.put(("progress", self._PHASE_W_PREPARE))
@@ -553,6 +872,7 @@ class App:
 
             aesthetic_scores: dict = {}
             face_scores: dict = {}
+            consistency_scores: dict = {}
             camie_batch_size = 16
             aes_batch_size = 16
 
@@ -583,13 +903,21 @@ class App:
                 batch_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
                 scorer.infer_batch_pil(batch_items)
 
+                consistency_candidates = list(chunk_paths)
+                if consistency_scorer is not None and reference_embedding is not None:
+                    consistency_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
+                    if consistency_items:
+                        consistency_scores.update(
+                            consistency_scorer.score_batch_pil(consistency_items, reference_embedding)
+                        )
+
                 if face_scorer_inst is not None and face_first:
-                    face_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
+                    face_items = [(p, pil_images[p]) for p in consistency_candidates if p in pil_images]
                     if face_items:
                         face_scores.update(face_scorer_inst.score_batch_pil(face_items))
 
                 if aes_scorer is not None:
-                    aes_candidates = list(chunk_paths)
+                    aes_candidates = list(consistency_candidates)
                     if face_first:
                         aes_candidates = [
                             p for p in aes_candidates
@@ -603,7 +931,7 @@ class App:
                             aesthetic_scores.update(batch_result)
 
                 if face_scorer_inst is not None and not face_first:
-                    face_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
+                    face_items = [(p, pil_images[p]) for p in consistency_candidates if p in pil_images]
                     if face_items:
                         face_scores.update(face_scorer_inst.score_batch_pil(face_items))
 
@@ -618,6 +946,20 @@ class App:
 
             if face_scorer_inst is not None:
                 face_scorer_inst.close()
+
+            if consistency_scorer is not None and consistency_scores:
+                from consistency_scorer import normalize_score_map
+
+                consistency_raw_scores = dict(consistency_scores)
+                consistency_scores, consistency_normalization_stats = normalize_score_map(consistency_scores)
+                if consistency_normalization_stats.get("collapsed"):
+                    self.queue.put(("status", "Consistency scores were tightly collapsed; using raw scores fallback normalization."))
+                else:
+                    self.queue.put((
+                        "status",
+                        "Consistency normalized using global percentiles "
+                        f"({consistency_normalization_stats['scale_min']:.4f} -> {consistency_normalization_stats['scale_max']:.4f}).",
+                    ))
 
             self.queue.put(("status", "Ranking & exporting..."))
 
@@ -652,20 +994,44 @@ class App:
                     removed = before_count - after_count
                     self.queue.put(("status", f"Exclude tags: {removed} images removed ({', '.join(exclude_tags)})."))
 
+            # Tag deviation auto-exclude (reference-based)
+            tag_deviation_details: dict = {}
+            if reference_tag_profile is not None:
+                self.queue.put(("status", "Checking tag deviations against reference..."))
+                tag_dev_excluded, tag_deviation_details = scorer.get_tag_deviation_excluded_paths(
+                    reference_tag_profile, emotion_groups,
+                )
+                if tag_dev_excluded:
+                    before_count = sum(len(v) for v in emotion_groups.values())
+                    emotion_groups = {
+                        emo: [(p, n) for p, n in items if p not in tag_dev_excluded]
+                        for emo, items in emotion_groups.items()
+                    }
+                    emotion_groups = {k: v for k, v in emotion_groups.items() if v}
+                    after_count = sum(len(v) for v in emotion_groups.values())
+                    removed = before_count - after_count
+                    self.queue.put(("status", f"Tag deviation filter: {removed} images removed."))
+
             scored = scorer.compute_emotion_scores(emotion_groups, exif_tags)
 
             score_meta = {}
-            if aes_scorer is not None or face_scorer_inst is not None:
+            if aes_scorer is not None or face_scorer_inst is not None or consistency_scorer is not None:
                 actual_face_mode = face_mode if face_scorer_inst is not None else "off"
                 scored, score_meta = compute_combined_scores(
                     scored,
                     aesthetic_scores=aesthetic_scores if aes_scorer is not None else None,
                     face_scores=face_scores if face_scorer_inst is not None else None,
+                    consistency_scores=consistency_scores if consistency_scorer is not None else None,
+                    consistency_raw_scores=consistency_raw_scores if consistency_scorer is not None else None,
                     emotion_weight=emotion_weight,
                     aesthetic_weight=aesthetic_weight,
                     face_mode=actual_face_mode,
                     face_threshold=face_threshold,
                     face_weight=face_weight,
+                    consistency_mode=consistency_mode,
+                    consistency_weight=consistency_weight,
+                    consistency_gate_threshold=consistency_gate_threshold,
+                    consistency_penalty_power=consistency_penalty_power,
                 )
 
             self.queue.put(("status", "Copying files..."))
@@ -684,6 +1050,27 @@ class App:
                     config["face_threshold"] = face_threshold
                 elif face_mode == "weighted":
                     config["face_weight"] = face_weight
+            if consistency_scorer is not None:
+                config["consistency_enabled"] = True
+                config["consistency_model"] = consistency_scorer.model_name
+                config["consistency_cache_dir"] = str(consistency_scorer.cache_dir)
+                config["consistency_mode"] = consistency_mode
+                config["consistency_weight"] = consistency_weight
+                config["consistency_gate_threshold"] = consistency_gate_threshold
+                config["consistency_penalty_power"] = consistency_penalty_power
+                config["reference_images"] = [str(path) for path in reference_paths]
+                if consistency_normalization_stats is not None:
+                    config["consistency_normalization"] = {
+                        "method": "global_percentile_minmax",
+                        **consistency_normalization_stats,
+                    }
+            if reference_tag_profile is not None:
+                config["tag_deviation_filter"] = {
+                    "enabled": True,
+                    "candidate_threshold": 0.7,
+                    "deviation_threshold": 0.3,
+                    "images_excluded": len(tag_deviation_details),
+                }
 
             generate_report(scored, top_n, config, output_dir, score_meta=score_meta)
 

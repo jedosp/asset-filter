@@ -14,8 +14,10 @@ else:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Set HF_HOME for portable model caching
-os.environ.setdefault("HF_HOME", os.path.join(app_dir, "cache", "huggingface"))
+# Set portable model directories under the app-local models folder
+os.environ.setdefault("HF_HOME", os.path.join(app_dir, "models", "huggingface"))
+os.environ.setdefault("TORCH_HOME", os.path.join(app_dir, "models", "torch"))
+os.environ.setdefault("ASSET_FILTER_APP_DIR", app_dir)
 
 # Configure logging
 logging.basicConfig(
