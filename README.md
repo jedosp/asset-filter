@@ -32,7 +32,7 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 
 | 파일 | 설명 |
 |------|------|
-| `AssetFilter-v1.1.0-cuda-split.*` | 임베디드 Python + CUDA torch 포함 (분할 압축, GPU 없으면 CPU 자동 전환) |
+| `AssetFilter-v1.1.0.*` | 임베디드 Python + CUDA torch 포함 (분할 압축, GPU 없으면 CPU 자동 전환) |
 
 1. `.z01` + `.zip` 두 파일을 모두 다운로드한 뒤 같은 폴더에 놓고 `.zip`을 해제
 2. `AssetFilter.exe` 실행 (또는 `run.bat`)
