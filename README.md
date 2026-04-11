@@ -35,10 +35,10 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 | `AssetFilter-v1.1.0-cuda-split.*` | 임베디드 Python + CUDA torch 포함 (분할 압축, GPU 없으면 CPU 자동 전환) |
 
 1. `.z01` + `.zip` 두 파일을 모두 다운로드한 뒤 같은 폴더에 놓고 `.zip`을 해제
-2. `run.bat` 실행
+2. `AssetFilter.exe` 실행 (또는 `run.bat`)
 3. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~3.5GB)
 
-> **run.bat** — 임베디드 Python 환경으로 실행. NVIDIA GPU가 있으면 CUDA 가속, 없으면 CPU로 자동 전환.
+> **AssetFilter.exe** — 임베디드 Python 환경의 GUI 런처. NVIDIA GPU가 있으면 CUDA 가속, 없으면 CPU로 자동 전환. `run.bat`과 동일하게 동작합니다.
 
 자동 다운로드되는 모델들은 모두 실행 기준 폴더 아래의 `models` 폴더에 저장됩니다.
 
@@ -106,7 +106,7 @@ Reference Consistency 기능은 공개 DINOv2 모델을 첫 실행 시 자동으
 
 실제로는 Hugging Face 캐시 구조 아래에 `facebook/dinov2-base` 관련 파일이 저장됩니다.
 
-`run.bat` 또는 개발 환경에서 실행하면 DINOv2를 사용할 수 있습니다.
+`AssetFilter.exe` (또는 `run.bat`) 및 개발 환경에서 DINOv2를 사용할 수 있습니다.
 
 ---
 
