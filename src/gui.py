@@ -969,6 +969,7 @@ class App:
                 self.queue.put(("progress", pct))
                 self.queue.put(("status", f"Analyzing images... {processed}/{total}"))
 
+            face_scoring_done = face_scorer_inst is not None
             if face_scorer_inst is not None:
                 face_scorer_inst.close()
                 face_scorer_inst = None
@@ -1047,12 +1048,12 @@ class App:
             scored = scorer.compute_emotion_scores(emotion_groups, exif_tags)
 
             score_meta = {}
-            actual_face_mode = face_mode if face_scorer_inst is not None else "off"
-            if aes_scorer is not None or face_scorer_inst is not None or consistency_scorer is not None:
+            actual_face_mode = face_mode if face_scoring_done else "off"
+            if aes_scorer is not None or face_scoring_done or consistency_scorer is not None:
                 scored, score_meta = compute_combined_scores(
                     scored,
                     aesthetic_scores=aesthetic_scores if aes_scorer is not None else None,
-                    face_scores=face_scores if face_scorer_inst is not None else None,
+                    face_scores=face_scores if face_scoring_done else None,
                     consistency_scores=consistency_scores if consistency_scorer is not None else None,
                     consistency_raw_scores=consistency_raw_scores if consistency_scorer is not None else None,
                     emotion_weight=emotion_weight,
@@ -1098,13 +1099,13 @@ class App:
                         recovery_scored = scorer.compute_emotion_scores(recovery_groups, exif_tags)
 
                         # Re-score with relaxed settings: hard_filter → weighted
-                        if aes_scorer is not None or face_scorer_inst is not None or consistency_scorer is not None:
+                        if aes_scorer is not None or face_scoring_done or consistency_scorer is not None:
                             recovery_face_mode = "weighted" if actual_face_mode == "hard_filter" else actual_face_mode
                             recovery_consistency_mode = "weighted" if consistency_mode == "hard_filter" else consistency_mode
                             recovery_scored, _recovery_meta = compute_combined_scores(
                                 recovery_scored,
                                 aesthetic_scores=aesthetic_scores if aes_scorer is not None else None,
-                                face_scores=face_scores if face_scorer_inst is not None else None,
+                                face_scores=face_scores if face_scoring_done else None,
                                 consistency_scores=consistency_scores if consistency_scorer is not None else None,
                                 consistency_raw_scores=consistency_raw_scores if consistency_scorer is not None else None,
                                 emotion_weight=emotion_weight,
@@ -1155,7 +1156,7 @@ class App:
                 config["aesthetic_model"] = "aesthetic-predictor-v2-5"
                 config["emotion_weight"] = emotion_weight
                 config["aesthetic_weight"] = aesthetic_weight
-            if face_scorer_inst is not None:
+            if face_scoring_done:
                 config["face_framing_enabled"] = True
                 config["face_framing_mode"] = face_mode
                 if face_mode == "hard_filter":
