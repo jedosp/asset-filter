@@ -374,7 +374,7 @@ class App:
         self.topn_spin.state(state)
         self.aesthetic_check.state(state)
         self.face_check.state(state)
-        self.face_mode_combo.state(["disabled"] if running else ["readonly"])
+        self.face_mode_combo.state(["disabled"] if running else ["!disabled", "readonly"])
         self.face_threshold_spin.state(state)
         self.min_aes_spin.state(state)
         self.exclude_tags_entry.state(state)
@@ -384,7 +384,7 @@ class App:
         self.consistency_check.state(state)
         self.reference_add_btn.state(state)
         self.reference_clear_btn.state(state)
-        self.consistency_mode_combo.state(["disabled"] if running else ["readonly"])
+        self.consistency_mode_combo.state(["disabled"] if running else ["!disabled", "readonly"])
         self.consistency_threshold_spin.state(state)
         self.consistency_weight_spin.state(state)
         if running:
