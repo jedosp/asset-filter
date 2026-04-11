@@ -493,7 +493,7 @@ class App:
         self._updating_weights = False
 
     def _couple_weights(self, changed: str):
-        """Auto-adjust other weights to maintain sum = 1.0."""
+        """Auto-adjust other weights to maintain sum = 1.0 on 0.05 grid."""
         if self._updating_weights:
             return
         self._updating_weights = True
@@ -507,24 +507,41 @@ class App:
                 changed = "emotion"
 
             weights = self._get_current_weight_values()
-            changed_value = max(0.0, min(1.0, weights[changed]))
+            # Snap changed value to 0.05 grid
+            changed_value = round(max(0.0, min(1.0, weights[changed])) * 20) / 20
             other_keys = [key for key in active_keys if key != changed]
-            remainder = max(0.0, 1.0 - changed_value)
-            old_sum = sum(weights[key] for key in other_keys)
 
             if not other_keys:
-                normalized = {changed: 1.0}
-            elif old_sum > 0:
-                normalized = {changed: changed_value}
-                for key in other_keys:
-                    normalized[key] = remainder * (weights[key] / old_sum)
+                self._set_weight_values({changed: 1.0})
+                return
+
+            remainder = round(max(0.0, 1.0 - changed_value), 10)
+            old_sum = sum(weights[key] for key in other_keys)
+
+            # Determine proportional shares
+            if old_sum > 0:
+                shares = {key: weights[key] / old_sum for key in other_keys}
             else:
                 defaults = self._default_weights_for_keys(active_keys)
                 default_sum = sum(defaults[key] for key in other_keys)
-                normalized = {changed: changed_value}
-                for key in other_keys:
-                    share = defaults[key] / default_sum if default_sum > 0 else 1.0 / len(other_keys)
-                    normalized[key] = remainder * share
+                if default_sum > 0:
+                    shares = {key: defaults[key] / default_sum for key in other_keys}
+                else:
+                    shares = {key: 1.0 / len(other_keys) for key in other_keys}
+
+            # Distribute remainder in 0.05 units using largest-remainder method
+            total_units = round(remainder * 20)
+            raw_units = {key: shares[key] * total_units for key in other_keys}
+            floored = {key: int(raw_units[key]) for key in other_keys}
+            deficit = total_units - sum(floored.values())
+            if deficit > 0:
+                ranked = sorted(other_keys, key=lambda k: -(raw_units[k] - floored[k]))
+                for i in range(int(deficit)):
+                    floored[ranked[i]] += 1
+
+            normalized = {changed: changed_value}
+            for key in other_keys:
+                normalized[key] = floored[key] * 0.05
 
             self._set_weight_values(normalized)
         except (tk.TclError, ValueError):
@@ -695,7 +712,14 @@ class App:
         self._pause_event.set()
 
         input_folder = Path(self.folder_var.get())
-        self.output_dir = input_folder.parent / f"{input_folder.name}_filtered"
+        base_output = input_folder.parent / f"{input_folder.name}_filtered"
+        if (base_output / "report.json").exists():
+            idx = 2
+            while (input_folder.parent / f"{input_folder.name}_filtered_{idx}" / "report.json").exists():
+                idx += 1
+            self.output_dir = input_folder.parent / f"{input_folder.name}_filtered_{idx}"
+        else:
+            self.output_dir = base_output
         self.status_var.set("Reading EXIF tags from images...")
 
         face_on = self.face_var.get()
@@ -965,6 +989,10 @@ class App:
 
             self.queue.put(("status", "Ranking & exporting..."))
 
+            # Save original groups for recovery pass
+            original_emotion_groups = {emo: list(items) for emo, items in emotion_groups.items()}
+            exclude_tag_excluded: set[Path] = set()
+
             # Global Aesthetic Floor
             min_aes = scoring_config.get("min_aesthetic_quality", 0.0)
             if aes_scorer is not None and min_aes > 1.0:
@@ -986,6 +1014,7 @@ class App:
                     exclude_tags, emotion_groups, exif_tags_by_emotion=exif_tags,
                 )
                 if excluded_paths:
+                    exclude_tag_excluded = excluded_paths
                     before_count = sum(len(v) for v in emotion_groups.values())
                     emotion_groups = {
                         emo: [(p, n) for p, n in items if p not in excluded_paths]
@@ -1017,8 +1046,8 @@ class App:
             scored = scorer.compute_emotion_scores(emotion_groups, exif_tags)
 
             score_meta = {}
+            actual_face_mode = face_mode if face_scorer_inst is not None else "off"
             if aes_scorer is not None or face_scorer_inst is not None or consistency_scorer is not None:
-                actual_face_mode = face_mode if face_scorer_inst is not None else "off"
                 scored, score_meta = compute_combined_scores(
                     scored,
                     aesthetic_scores=aesthetic_scores if aes_scorer is not None else None,
@@ -1035,6 +1064,84 @@ class App:
                     consistency_gate_threshold=consistency_gate_threshold,
                     consistency_penalty_power=consistency_penalty_power,
                 )
+
+            # --- Recovery pass for deficit emotions ---
+            if top_n > 1:
+                deficit_emotions: dict[str, int] = {}
+                for emo in original_emotion_groups:
+                    current = len(scored.get(emo, []))
+                    if current < top_n:
+                        deficit_emotions[emo] = top_n - current
+
+                if deficit_emotions:
+                    # Build recovery groups: original candidates minus exclude-tag-excluded
+                    # and minus already-scored paths
+                    recovery_groups: dict[str, list[tuple[Path, int]]] = {}
+                    for emo, needed in deficit_emotions.items():
+                        existing_paths = {item["path"] for item in scored.get(emo, [])}
+                        recovery = [
+                            (p, n) for p, n in original_emotion_groups[emo]
+                            if p not in existing_paths and p not in exclude_tag_excluded
+                        ]
+                        if recovery:
+                            recovery_groups[emo] = recovery
+
+                    if recovery_groups:
+                        logger.info(
+                            "Recovery pass: %d emotions need more candidates (total deficit: %d)",
+                            len(recovery_groups),
+                            sum(deficit_emotions[e] for e in recovery_groups),
+                        )
+                        recovery_scored = scorer.compute_emotion_scores(recovery_groups, exif_tags)
+
+                        # Re-score with relaxed settings: hard_filter → weighted
+                        if aes_scorer is not None or face_scorer_inst is not None or consistency_scorer is not None:
+                            recovery_face_mode = "weighted" if actual_face_mode == "hard_filter" else actual_face_mode
+                            recovery_consistency_mode = "weighted" if consistency_mode == "hard_filter" else consistency_mode
+                            recovery_scored, _recovery_meta = compute_combined_scores(
+                                recovery_scored,
+                                aesthetic_scores=aesthetic_scores if aes_scorer is not None else None,
+                                face_scores=face_scores if face_scorer_inst is not None else None,
+                                consistency_scores=consistency_scores if consistency_scorer is not None else None,
+                                consistency_raw_scores=consistency_raw_scores if consistency_scorer is not None else None,
+                                emotion_weight=emotion_weight,
+                                aesthetic_weight=aesthetic_weight,
+                                face_mode=recovery_face_mode,
+                                face_threshold=face_threshold,
+                                face_weight=face_weight,
+                                consistency_mode=recovery_consistency_mode,
+                                consistency_weight=consistency_weight,
+                                consistency_gate_threshold=consistency_gate_threshold,
+                                consistency_penalty_power=consistency_penalty_power,
+                            )
+
+                        # Merge recovery into scored (existing items first, fill deficit)
+                        recovered_total = 0
+                        for emo in recovery_groups:
+                            existing = scored.get(emo, [])
+                            existing_paths = {item["path"] for item in existing}
+                            recovery_items = [
+                                item for item in recovery_scored.get(emo, [])
+                                if item["path"] not in existing_paths
+                            ]
+                            for item in recovery_items:
+                                item["recovered_from_filter"] = True
+                            needed = deficit_emotions[emo]
+                            fill = recovery_items[:needed]
+                            if fill:
+                                merged = existing + fill
+                                merged.sort(key=lambda x: x["score"], reverse=True)
+                                scored[emo] = merged
+                                recovered_total += len(fill)
+                                # Update meta
+                                if emo not in score_meta:
+                                    score_meta[emo] = {}
+                                score_meta[emo]["recovery_filled"] = len(fill)
+
+                        if recovered_total > 0:
+                            logger.info("Recovery pass: %d images recovered across %d emotions",
+                                        recovered_total, len([e for e in recovery_groups if score_meta.get(e, {}).get("recovery_filled")]))
+                            self.queue.put(("status", f"Recovery pass: {recovered_total} images recovered for deficit emotions."))
 
             self.queue.put(("status", "Copying files..."))
             output_dir.mkdir(parents=True, exist_ok=True)

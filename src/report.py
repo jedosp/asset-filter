@@ -36,6 +36,7 @@ def generate_report(
                 "penalized_by_consistency_gate",
                 "filtered_by_consistency",
                 "hard_filter_fallback_used",
+                "recovery_filled",
             ):
                 if meta_key in em_meta:
                     emotion_data[meta_key] = em_meta[meta_key]
@@ -59,6 +60,10 @@ def generate_report(
                 entry["combined_score"] = round(item["combined_score"], 4)
             else:
                 entry["score"] = round(item["score"], 4)
+            if item.get("recovered_from_filter"):
+                entry["recovered_from_filter"] = True
+            if item.get("hard_filter_fallback"):
+                entry["hard_filter_fallback"] = True
             scores_list.append(entry)
 
         emotion_data["scores"] = scores_list
