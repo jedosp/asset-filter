@@ -1077,7 +1077,9 @@ class App:
 
                 if deficit_emotions:
                     # Build recovery groups: original candidates minus exclude-tag-excluded
-                    # and tag-deviation-excluded paths, minus already-scored paths
+                    # paths, minus already-scored paths.
+                    # tag_dev_excluded images ARE allowed as recovery candidates
+                    # since tag deviation is auto-generated, not user-specified.
                     recovery_groups: dict[str, list[tuple[Path, int]]] = {}
                     for emo, needed in deficit_emotions.items():
                         existing_paths = {item["path"] for item in scored.get(emo, [])}
@@ -1085,7 +1087,6 @@ class App:
                             (p, n) for p, n in original_emotion_groups[emo]
                             if p not in existing_paths
                             and p not in exclude_tag_excluded
-                            and p not in tag_dev_excluded
                         ]
                         if recovery:
                             recovery_groups[emo] = recovery
