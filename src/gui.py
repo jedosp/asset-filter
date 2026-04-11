@@ -493,7 +493,15 @@ class App:
         self._updating_weights = False
 
     def _couple_weights(self, changed: str):
-        """Auto-adjust other weights to maintain sum = 1.0 on 0.05 grid."""
+        """Auto-adjust other weights to maintain sum = 1.0 on 0.05 grid.
+
+        Uses fixed priority compensation so the absorbing weight is always
+        predictable:
+          - Non-emotion changed → emotion absorbs first
+          - Emotion changed    → aesthetic absorbs first
+        Overflow cascades to the next weight in priority order
+        (emotion > aesthetic > face > consistency).
+        """
         if self._updating_weights:
             return
         self._updating_weights = True
@@ -507,43 +515,41 @@ class App:
                 changed = "emotion"
 
             weights = self._get_current_weight_values()
-            # Snap changed value to 0.05 grid
-            changed_value = round(max(0.0, min(1.0, weights[changed])) * 20) / 20
-            other_keys = [key for key in active_keys if key != changed]
+            # Snap changed value to 0.05 grid (integer units 0-20)
+            changed_units = max(0, min(20, round(weights[changed] * 20)))
 
-            if not other_keys:
+            # Fixed compensation priority (changed key excluded)
+            priority = [k for k in ("emotion", "aesthetic", "face", "consistency")
+                        if k in active_keys and k != changed]
+
+            if not priority:
                 self._set_weight_values({changed: 1.0})
                 return
 
-            remainder = round(max(0.0, 1.0 - changed_value), 10)
-            old_sum = sum(weights[key] for key in other_keys)
+            # Snap all other weights to their current grid values
+            units = {changed: changed_units}
+            for k in priority:
+                units[k] = max(0, min(20, round(weights[k] * 20)))
 
-            # Determine proportional shares
-            if old_sum > 0:
-                shares = {key: weights[key] / old_sum for key in other_keys}
-            else:
-                defaults = self._default_weights_for_keys(active_keys)
-                default_sum = sum(defaults[key] for key in other_keys)
-                if default_sum > 0:
-                    shares = {key: defaults[key] / default_sum for key in other_keys}
+            # How many 0.05 units to add/subtract to reach sum=1.0
+            deficit = 20 - sum(units.values())
+
+            # Cascade through priority absorbers
+            for k in priority:
+                if deficit == 0:
+                    break
+                new_val = units[k] + deficit
+                if new_val < 0:
+                    deficit = new_val
+                    units[k] = 0
+                elif new_val > 20:
+                    deficit = new_val - 20
+                    units[k] = 20
                 else:
-                    shares = {key: 1.0 / len(other_keys) for key in other_keys}
+                    units[k] = new_val
+                    deficit = 0
 
-            # Distribute remainder in 0.05 units using largest-remainder method
-            total_units = round(remainder * 20)
-            raw_units = {key: shares[key] * total_units for key in other_keys}
-            floored = {key: int(raw_units[key]) for key in other_keys}
-            deficit = total_units - sum(floored.values())
-            if deficit > 0:
-                ranked = sorted(other_keys, key=lambda k: -(raw_units[k] - floored[k]))
-                for i in range(int(deficit)):
-                    floored[ranked[i]] += 1
-
-            normalized = {changed: changed_value}
-            for key in other_keys:
-                normalized[key] = floored[key] * 0.05
-
-            self._set_weight_values(normalized)
+            self._set_weight_values({k: round(v * 0.05, 2) for k, v in units.items()})
         except (tk.TclError, ValueError):
             pass
         finally:
