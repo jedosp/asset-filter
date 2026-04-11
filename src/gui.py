@@ -542,7 +542,7 @@ class App:
             self.consistency_model_available
             and self.consistency_var.get()
             and self.reference_paths
-            and self.consistency_mode_var.get() in ("Weighted", "Hard Filter")
+            and self.consistency_mode_var.get() == "Weighted"
         ):
             active.append("consistency")
         return active
@@ -731,7 +731,7 @@ class App:
             "consistency_enabled": self.consistency_model_available and self.consistency_var.get() and bool(self.reference_paths),
             "consistency_weight": (
                 self.consistency_weight_var.get()
-                if consistency_mode in ("weighted", "hard_filter")
+                if consistency_mode == "weighted"
                 else 0.0
             ),
             "consistency_mode": consistency_mode,
@@ -901,43 +901,44 @@ class App:
                         logger.warning("Failed to load %s: %s", p, e)
 
                 batch_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
-                scorer.infer_batch_pil(batch_items)
+                try:
+                    scorer.infer_batch_pil(batch_items)
 
-                consistency_candidates = list(chunk_paths)
-                if consistency_scorer is not None and reference_embedding is not None:
-                    consistency_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
-                    if consistency_items:
-                        consistency_scores.update(
-                            consistency_scorer.score_batch_pil(consistency_items, reference_embedding)
-                        )
+                    consistency_candidates = list(chunk_paths)
+                    if consistency_scorer is not None and reference_embedding is not None:
+                        consistency_items = [(p, pil_images[p]) for p in chunk_paths if p in pil_images]
+                        if consistency_items:
+                            consistency_scores.update(
+                                consistency_scorer.score_batch_pil(consistency_items, reference_embedding)
+                            )
 
-                if face_scorer_inst is not None and face_first:
-                    face_items = [(p, pil_images[p]) for p in consistency_candidates if p in pil_images]
-                    if face_items:
-                        face_scores.update(face_scorer_inst.score_batch_pil(face_items))
+                    if face_scorer_inst is not None and face_first:
+                        face_items = [(p, pil_images[p]) for p in consistency_candidates if p in pil_images]
+                        if face_items:
+                            face_scores.update(face_scorer_inst.score_batch_pil(face_items))
 
-                if aes_scorer is not None:
-                    aes_candidates = list(consistency_candidates)
-                    if face_first:
-                        aes_candidates = [
-                            p for p in aes_candidates
-                            if face_scores.get(p, 0.0) >= face_threshold
-                        ]
-                    for j in range(0, len(aes_candidates), aes_batch_size):
-                        sub_paths = aes_candidates[j : j + aes_batch_size]
-                        sub_items = [(p, pil_images[p]) for p in sub_paths if p in pil_images]
-                        if sub_items:
-                            batch_result = aes_scorer.score_batch_pil(sub_items)
-                            aesthetic_scores.update(batch_result)
+                    if aes_scorer is not None:
+                        aes_candidates = list(consistency_candidates)
+                        if face_first:
+                            aes_candidates = [
+                                p for p in aes_candidates
+                                if face_scores.get(p, 0.0) >= face_threshold
+                            ]
+                        for j in range(0, len(aes_candidates), aes_batch_size):
+                            sub_paths = aes_candidates[j : j + aes_batch_size]
+                            sub_items = [(p, pil_images[p]) for p in sub_paths if p in pil_images]
+                            if sub_items:
+                                batch_result = aes_scorer.score_batch_pil(sub_items)
+                                aesthetic_scores.update(batch_result)
 
-                if face_scorer_inst is not None and not face_first:
-                    face_items = [(p, pil_images[p]) for p in consistency_candidates if p in pil_images]
-                    if face_items:
-                        face_scores.update(face_scorer_inst.score_batch_pil(face_items))
-
-                for img in pil_images.values():
-                    img.close()
-                del pil_images
+                    if face_scorer_inst is not None and not face_first:
+                        face_items = [(p, pil_images[p]) for p in consistency_candidates if p in pil_images]
+                        if face_items:
+                            face_scores.update(face_scorer_inst.score_batch_pil(face_items))
+                finally:
+                    for img in pil_images.values():
+                        img.close()
+                    del pil_images
 
                 processed = min(i + camie_batch_size, total)
                 pct = phase2_base + (processed / total) * phase2_span
@@ -946,6 +947,7 @@ class App:
 
             if face_scorer_inst is not None:
                 face_scorer_inst.close()
+                face_scorer_inst = None
 
             if consistency_scorer is not None and consistency_scores:
                 from consistency_scorer import normalize_score_map
@@ -968,7 +970,7 @@ class App:
             if aes_scorer is not None and min_aes > 1.0:
                 before_count = sum(len(v) for v in emotion_groups.values())
                 emotion_groups = {
-                    emo: [(p, n) for p, n in items if aesthetic_scores.get(p, min_aes) >= min_aes]
+                    emo: [(p, n) for p, n in items if aesthetic_scores.get(p, 0.0) >= min_aes]
                     for emo, items in emotion_groups.items()
                 }
                 emotion_groups = {k: v for k, v in emotion_groups.items() if v}
@@ -1071,6 +1073,17 @@ class App:
                     "deviation_threshold": 0.3,
                     "images_excluded": len(tag_deviation_details),
                 }
+
+            # Release model resources
+            if hasattr(scorer, 'session'):
+                del scorer.session
+            del scorer
+            if aes_scorer is not None:
+                del aes_scorer.model, aes_scorer.preprocessor
+                del aes_scorer
+            if consistency_scorer is not None:
+                del consistency_scorer.model, consistency_scorer.processor
+                del consistency_scorer
 
             generate_report(scored, top_n, config, output_dir, score_meta=score_meta)
 

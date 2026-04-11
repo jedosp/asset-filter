@@ -436,7 +436,7 @@ def compute_combined_scores(
     face_weight: float = 0.15,
     consistency_mode: str = "weighted",
     consistency_weight: float = 0.20,
-    consistency_gate_threshold: float = 0.35,
+    consistency_gate_threshold: float = 0.60,
     consistency_penalty_power: float = 3.0,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
     """
@@ -458,7 +458,7 @@ def compute_combined_scores(
         all_emotion_zero = all(item["score"] == 0.0 for item in items)
         has_aesthetic = aesthetic_scores is not None
         has_face = face_mode == "weighted" and face_scores is not None
-        has_consistency = consistency_mode in ("weighted", "hard_filter") and consistency_scores is not None
+        has_consistency = consistency_mode == "weighted" and consistency_scores is not None
 
         if all_emotion_zero and (has_aesthetic or has_face or has_consistency):
             eff_emotion_w = 0.0
@@ -526,7 +526,7 @@ def compute_combined_scores(
                 combined += f_score * eff_face_w
             if has_consistency and c_score is not None:
                 combined += c_score * eff_consistency_w
-                if consistency_mode == "weighted" and c_score < consistency_gate_threshold:
+                if c_score < consistency_gate_threshold:
                     consistency_filtered_count += 1
                     penalty_ratio = max(0.0, c_score / consistency_gate_threshold)
                     combined *= penalty_ratio ** consistency_penalty_power

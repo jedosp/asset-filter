@@ -30,10 +30,15 @@ def generate_report(
         # Add face filter metadata if present
         if score_meta and emotion in score_meta:
             em_meta = score_meta[emotion]
-            if "filtered_by_face" in em_meta:
-                emotion_data["filtered_by_face"] = em_meta["filtered_by_face"]
-            if "fallback_auxiliary_only" in em_meta:
-                emotion_data["fallback_auxiliary_only"] = em_meta["fallback_auxiliary_only"]
+            for meta_key in (
+                "filtered_by_face",
+                "fallback_auxiliary_only",
+                "penalized_by_consistency_gate",
+                "filtered_by_consistency",
+                "hard_filter_fallback_used",
+            ):
+                if meta_key in em_meta:
+                    emotion_data[meta_key] = em_meta[meta_key]
 
         scores_list = []
         for item in items:
