@@ -35,10 +35,9 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 | `AssetFilter-v1.1.0-cuda-split.*` | 임베디드 Python + CUDA torch 포함 (분할 압축, GPU 없으면 CPU 자동 전환) |
 
 1. `.z01` + `.zip` 두 파일을 모두 다운로드한 뒤 같은 폴더에 놓고 `.zip`을 해제
-2. `run.bat` 또는 `AssetFilter.exe` 실행
+2. `run.bat` 실행
 3. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~3.5GB)
 
-> **AssetFilter.exe** — torch 미포함 독립 실행 파일. Aesthetic Score / Reference Consistency 옵션은 비활성화되며, Camie Tagger는 DirectML 가능 환경에서는 GPU를 사용하고 아니면 CPU로 동작합니다.
 > **run.bat** — 임베디드 Python 환경으로 실행. NVIDIA GPU가 있으면 CUDA 가속, 없으면 CPU로 자동 전환.
 
 자동 다운로드되는 모델들은 모두 실행 기준 폴더 아래의 `models` 폴더에 저장됩니다.
@@ -55,14 +54,14 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-### 빌드 (독립 실행 파일)
+### 빌드 (개발용)
 
 ```bash
 pip install pyinstaller
 build.bat
 ```
 
-PyInstaller 결과물은 `dist/AssetFilter.exe`에 생성되고, 배포용 실행 파일은 `release/AssetFilter.exe`로 별도 복사됩니다.
+PyInstaller 결과물은 `dist/AssetFilter.exe`에 생성됩니다. 일반 사용자는 빌드 없이 릴리즈 ZIP을 사용하세요.
 
 ---
 
@@ -107,7 +106,7 @@ Reference Consistency 기능은 공개 DINOv2 모델을 첫 실행 시 자동으
 
 실제로는 Hugging Face 캐시 구조 아래에 `facebook/dinov2-base` 관련 파일이 저장됩니다.
 
-`AssetFilter.exe`에는 `torch`가 없으므로 Reference Consistency가 비활성화됩니다. `run.bat` 또는 개발 환경에서 실행하면 DINOv2를 사용할 수 있습니다.
+`run.bat` 또는 개발 환경에서 실행하면 DINOv2를 사용할 수 있습니다.
 
 ---
 
