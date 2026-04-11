@@ -38,7 +38,7 @@ NovelAI로 대량 생성한 캐릭터 감정 이미지를 자동으로 필터링
 2. `run.bat` 또는 `AssetFilter.exe` 실행
 3. 첫 실행 시 모델 자동 다운로드 (Camie Tagger ~800MB, Aesthetic Predictor ~3.5GB)
 
-> **AssetFilter.exe** — CPU 전용 독립 실행 파일. torch 미포함으로 Aesthetic Score / Reference Consistency 옵션이 비활성화됩니다. Camie Tagger + DirectML만 동작합니다.
+> **AssetFilter.exe** — torch 미포함 독립 실행 파일. Aesthetic Score / Reference Consistency 옵션은 비활성화되며, Camie Tagger는 DirectML 가능 환경에서는 GPU를 사용하고 아니면 CPU로 동작합니다.
 > **run.bat** — 임베디드 Python 환경으로 실행. NVIDIA GPU가 있으면 CUDA 가속, 없으면 CPU로 자동 전환.
 
 자동 다운로드되는 모델들은 모두 실행 기준 폴더 아래의 `models` 폴더에 저장됩니다.
@@ -105,9 +105,9 @@ Reference Consistency 기능은 공개 DINOv2 모델을 첫 실행 시 자동으
 
 `models/huggingface`
 
-실제로는 Hugging Face 캐시 구조 아래에 `facebook/dinov2-small` 관련 파일이 저장됩니다.
+실제로는 Hugging Face 캐시 구조 아래에 `facebook/dinov2-base` 관련 파일이 저장됩니다.
 
-CPU 전용 `AssetFilter.exe`에는 `torch`가 없으므로 Reference Consistency가 비활성화됩니다. `run.bat` 또는 개발 환경에서 실행하면 DINOv2를 사용할 수 있습니다.
+`AssetFilter.exe`에는 `torch`가 없으므로 Reference Consistency가 비활성화됩니다. `run.bat` 또는 개발 환경에서 실행하면 DINOv2를 사용할 수 있습니다.
 
 ---
 

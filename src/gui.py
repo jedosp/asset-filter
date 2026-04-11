@@ -1027,6 +1027,7 @@ class App:
 
             # Tag deviation auto-exclude (reference-based)
             tag_deviation_details: dict = {}
+            tag_dev_excluded: set[Path] = set()
             if reference_tag_profile is not None:
                 self.queue.put(("status", "Checking tag deviations against reference..."))
                 tag_dev_excluded, tag_deviation_details = scorer.get_tag_deviation_excluded_paths(
@@ -1075,13 +1076,15 @@ class App:
 
                 if deficit_emotions:
                     # Build recovery groups: original candidates minus exclude-tag-excluded
-                    # and minus already-scored paths
+                    # and tag-deviation-excluded paths, minus already-scored paths
                     recovery_groups: dict[str, list[tuple[Path, int]]] = {}
                     for emo, needed in deficit_emotions.items():
                         existing_paths = {item["path"] for item in scored.get(emo, [])}
                         recovery = [
                             (p, n) for p, n in original_emotion_groups[emo]
-                            if p not in existing_paths and p not in exclude_tag_excluded
+                            if p not in existing_paths
+                            and p not in exclude_tag_excluded
+                            and p not in tag_dev_excluded
                         ]
                         if recovery:
                             recovery_groups[emo] = recovery
