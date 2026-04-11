@@ -62,7 +62,7 @@ pip install pyinstaller
 build.bat
 ```
 
-`dist/AssetFilter.exe`가 생성됩니다.
+PyInstaller 결과물은 `dist/AssetFilter.exe`에 생성되고, 배포용 실행 파일은 `release/AssetFilter.exe`로 별도 복사됩니다.
 
 ---
 

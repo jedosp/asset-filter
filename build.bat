@@ -9,6 +9,7 @@ echo [Build] Cleaning previous build...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist AssetFilter.spec del AssetFilter.spec
+if not exist release mkdir release
 
 echo [Build] Building AssetFilter.exe...
 python -m PyInstaller ^
@@ -37,5 +38,9 @@ python -m PyInstaller ^
     --exclude-module matplotlib ^
     src\main.py
 
-echo [Build] Done. Output: dist\AssetFilter.exe
-pause
+echo [Build] Copying distributable to release\AssetFilter.exe...
+copy /y dist\AssetFilter.exe release\AssetFilter.exe >nul
+
+echo [Build] Done. Outputs:
+echo   - dist\AssetFilter.exe
+echo   - release\AssetFilter.exe
